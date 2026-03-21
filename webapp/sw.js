@@ -46,7 +46,9 @@ self.addEventListener("fetch", (event) => {
                 return fetch(event.request)
                     .then((response) => {
                         const clone = response.clone();
-                        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                        caches.open(CACHE_NAME)
+                            .then((cache) => cache.put(event.request, clone))
+                            .catch(() => {/* cache write failed — non-critical */});
                         return response;
                     })
                     .catch(() => cached || new Response("AirBridge is offline", { status: 503 }));
@@ -54,7 +56,9 @@ self.addEventListener("fetch", (event) => {
 
             return cached || fetch(event.request).then((response) => {
                 const clone = response.clone();
-                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                caches.open(CACHE_NAME)
+                    .then((cache) => cache.put(event.request, clone))
+                    .catch(() => {/* cache write failed — non-critical */});
                 return response;
             });
         })
