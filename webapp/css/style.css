@@ -375,9 +375,33 @@ body {
 
 .transfer-header {
     display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.transfer-icon {
+    font-size: 28px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.transfer-thumbnail {
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
+    image-rendering: pixelated;
+    background: var(--bg-primary);
+}
+
+.transfer-header-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
 }
 
 .transfer-filename {
@@ -442,12 +466,19 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
 }
 
 .file-list-header h3 {
     font-size: 16px;
     font-weight: 600;
+}
+
+.batch-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
 }
 
 .file-list {
@@ -471,9 +502,27 @@ body {
     background: var(--bg-hover);
 }
 
+.file-select {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
 .file-icon {
     font-size: 28px;
     flex-shrink: 0;
+}
+
+.file-thumbnail {
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
+    image-rendering: auto;
+    background: var(--bg-primary);
 }
 
 .file-info {

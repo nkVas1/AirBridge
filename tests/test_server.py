@@ -184,6 +184,55 @@ class TestWebSocket:
             assert result_msg["type"] == "upload_complete"
             assert result_msg["progress"] == 100.0
 
+    async def test_sequential_upload_flow(self, client: TestClient, app) -> None:
+        """Test uploading multiple files sequentially (batch upload fix)."""
+        pin = app["auth"].pin
+        config = app["config"]
+        async with client.ws_connect("/ws") as ws:
+            # Auth
+            await ws.send_json({
+                "type": "auth",
+                "pin": pin,
+                "session_id": "multi-upload-test",
+            })
+            auth_msg = await ws.receive_json()
+            assert auth_msg["authenticated"] is True
+
+            files = [
+                ("file_a.txt", b"Content of file A"),
+                ("file_b.txt", b"Content of file B - longer data here"),
+                ("file_c.txt", b"C"),
+            ]
+
+            for filename, data in files:
+                # Start upload
+                await ws.send_json({
+                    "type": "upload_start",
+                    "filename": filename,
+                    "size": len(data),
+                })
+                ready_msg = await ws.receive_json()
+                assert ready_msg["type"] == "upload_ready"
+                transfer_id = ready_msg["transfer_id"]
+
+                # Send chunk
+                await ws.send_json({
+                    "type": "upload_chunk",
+                    "transfer_id": transfer_id,
+                })
+                await ws.send_bytes(data)
+
+                # Receive completion
+                result_msg = await ws.receive_json()
+                assert result_msg["type"] == "upload_complete"
+                assert result_msg["progress"] == 100.0
+
+            # Verify all files were saved correctly
+            for filename, data in files:
+                file_path = config.downloads_dir / filename
+                assert file_path.exists(), f"File {filename} not found"
+                assert file_path.read_bytes() == data, f"File {filename} content mismatch"
+
     async def test_ping_pong(self, client: TestClient, app) -> None:
         pin = app["auth"].pin
         async with client.ws_connect("/ws") as ws:
