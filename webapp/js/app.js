@@ -15,6 +15,8 @@ const AirBridge = (() => {
     let serverUrl = "";
     let chunkSize = 65536;
     let currentUpload = null;
+    const uploadQueue = [];       // Queue of files waiting to be uploaded
+    let uploadInProgress = false; // Guard against concurrent uploads
 
     // --- DOM Elements ---
     const $ = (sel) => document.querySelector(sel);
@@ -36,7 +38,15 @@ const AirBridge = (() => {
         transferList: () => $("#transfer-list"),
         fileList: () => $("#file-list"),
         refreshFiles: () => $("#refresh-files"),
+        batchActions: () => $("#batch-actions"),
+        selectAllBtn: () => $("#select-all-btn"),
+        downloadSelectedBtn: () => $("#download-selected-btn"),
     };
+
+    // Image extensions for preview generation
+    const IMAGE_EXTENSIONS = new Set([
+        "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "svg",
+    ]);
 
     // --- Utilities ---
     function formatSize(bytes) {
@@ -72,10 +82,53 @@ const AirBridge = (() => {
         return icons[ext] || "📎";
     }
 
+    function isImageFile(filename) {
+        const ext = filename.split(".").pop().toLowerCase();
+        return IMAGE_EXTENSIONS.has(ext);
+    }
+
     function generateSessionId() {
         const arr = new Uint8Array(16);
         crypto.getRandomValues(arr);
         return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    /**
+     * Generate a small thumbnail preview from a File object.
+     * Returns a promise that resolves to a base64 data URL or null.
+     */
+    function generateThumbnail(file, maxSize) {
+        maxSize = maxSize || 48;
+        return new Promise((resolve) => {
+            if (!file.type.startsWith("image/") && !isImageFile(file.name)) {
+                resolve(null);
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    const canvas = document.createElement("canvas");
+                    let w = img.width;
+                    let h = img.height;
+                    if (w > h) {
+                        if (w > maxSize) { h = Math.round(h * maxSize / w); w = maxSize; }
+                    } else {
+                        if (h > maxSize) { w = Math.round(w * maxSize / h); h = maxSize; }
+                    }
+                    canvas.width = w;
+                    canvas.height = h;
+                    const ctx = canvas.getContext("2d");
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(img, 0, 0, w, h);
+                    resolve(canvas.toDataURL("image/png", 0.6));
+                };
+                img.onerror = () => resolve(null);
+                img.src = e.target.result;
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(file);
+        });
     }
 
     // --- WebSocket ---
@@ -191,58 +244,91 @@ const AirBridge = (() => {
             ws = null;
         }
         sessionId = "";
+        currentUpload = null;
+        uploadQueue.length = 0;
+        uploadInProgress = false;
         showScreen("auth");
         els.pinInput().value = "";
     }
 
-    // --- File Upload ---
+    // --- File Upload (Queue-based) ---
     function handleFiles(files) {
         if (!authenticated || !ws || ws.readyState !== WebSocket.OPEN) {
             console.error("[AirBridge] Not connected");
             return;
         }
 
+        // Add all files to the queue
         for (const file of files) {
-            queueUpload(file);
+            addToUploadQueue(file);
         }
+
+        // Start processing if not already uploading
+        processUploadQueue();
     }
 
-    function queueUpload(file) {
+    async function addToUploadQueue(file) {
         els.transferQueue().hidden = false;
 
         const itemId = "upload-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+        // Generate thumbnail preview for image files
+        let thumbnailHtml = '<span class="transfer-icon">' + getFileIcon(file.name) + '</span>';
+        const thumb = await generateThumbnail(file, 40);
+        if (thumb) {
+            thumbnailHtml = '<img class="transfer-thumbnail" src="' + thumb + '" alt="preview">';
+        }
 
         // Create transfer UI element
         const itemEl = document.createElement("div");
         itemEl.className = "transfer-item";
         itemEl.id = itemId;
-        itemEl.innerHTML = `
-            <div class="transfer-header">
-                <span class="transfer-filename" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-                <span class="transfer-size">${formatSize(file.size)}</span>
-            </div>
-            <div class="transfer-progress-bar">
-                <div class="transfer-progress-fill" id="${itemId}-bar"></div>
-            </div>
-            <div class="transfer-stats">
-                <span class="transfer-status" id="${itemId}-status">Preparing...</span>
-                <span id="${itemId}-speed"></span>
-            </div>
-        `;
+        itemEl.innerHTML =
+            '<div class="transfer-header">' +
+                thumbnailHtml +
+                '<div class="transfer-header-text">' +
+                    '<span class="transfer-filename" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</span>' +
+                    '<span class="transfer-size">' + formatSize(file.size) + '</span>' +
+                '</div>' +
+            '</div>' +
+            '<div class="transfer-progress-bar">' +
+                '<div class="transfer-progress-fill" id="' + itemId + '-bar"></div>' +
+            '</div>' +
+            '<div class="transfer-stats">' +
+                '<span class="transfer-status" id="' + itemId + '-status">Queued</span>' +
+                '<span id="' + itemId + '-speed"></span>' +
+            '</div>';
         els.transferList().prepend(itemEl);
 
-        // Start upload via WebSocket
-        ws.send(JSON.stringify({
-            type: "upload_start",
-            filename: file.name,
-            size: file.size,
-            mime_type: file.type || "application/octet-stream",
-        }));
-
-        // Store file reference for chunk sending
-        currentUpload = {
+        // Add to queue (don't send upload_start yet!)
+        uploadQueue.push({
             file: file,
             itemId: itemId,
+        });
+    }
+
+    function processUploadQueue() {
+        if (uploadInProgress) return;
+        if (uploadQueue.length === 0) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+        uploadInProgress = true;
+        const next = uploadQueue.shift();
+
+        // Now send upload_start for this specific file
+        updateTransferStatus(next.itemId, "Preparing...");
+
+        ws.send(JSON.stringify({
+            type: "upload_start",
+            filename: next.file.name,
+            size: next.file.size,
+            mime_type: next.file.type || "application/octet-stream",
+        }));
+
+        // Set as current upload
+        currentUpload = {
+            file: next.file,
+            itemId: next.itemId,
             transferId: null,
             offset: 0,
             totalChunks: 0,
@@ -328,8 +414,15 @@ const AirBridge = (() => {
         if (speedEl) speedEl.textContent = "";
 
         currentUpload = null;
-        // Refresh file list
-        setTimeout(loadFileList, 500);
+        uploadInProgress = false;
+
+        // Process next file in queue
+        if (uploadQueue.length > 0) {
+            processUploadQueue();
+        } else {
+            // All uploads done — refresh file list
+            setTimeout(loadFileList, 500);
+        }
     }
 
     function showTransferError(message) {
@@ -345,11 +438,19 @@ const AirBridge = (() => {
             statusEl.classList.add("error");
         }
         currentUpload = null;
+        uploadInProgress = false;
+
+        // Try next file in queue even if this one failed
+        if (uploadQueue.length > 0) {
+            processUploadQueue();
+        }
     }
 
     // --- File Download ---
     let downloadBuffer = [];
     let downloadInfo = null;
+    let downloadQueue = [];       // Queue for batch downloads
+    let downloadInProgress = false;
 
     function handleDownloadStart(data) {
         downloadInfo = data;
@@ -386,6 +487,60 @@ const AirBridge = (() => {
 
         downloadInfo = null;
         downloadBuffer = [];
+        downloadInProgress = false;
+
+        // Process next download in batch queue
+        if (downloadQueue.length > 0) {
+            processDownloadQueue();
+        }
+    }
+
+    function downloadFile(filename) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+        ws.send(JSON.stringify({
+            type: "download_request",
+            filename: filename,
+        }));
+    }
+
+    // --- Batch Download ---
+    function downloadSelected() {
+        const checkboxes = document.querySelectorAll(".file-select:checked");
+        if (checkboxes.length === 0) return;
+
+        downloadQueue = [];
+        checkboxes.forEach((cb) => {
+            downloadQueue.push(cb.dataset.filename);
+        });
+        downloadInProgress = false;
+        processDownloadQueue();
+    }
+
+    function processDownloadQueue() {
+        if (downloadInProgress) return;
+        if (downloadQueue.length === 0) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+        downloadInProgress = true;
+        const filename = downloadQueue.shift();
+        downloadFile(filename);
+    }
+
+    function toggleSelectAll() {
+        const checkboxes = document.querySelectorAll(".file-select");
+        const allChecked = Array.from(checkboxes).every((cb) => cb.checked);
+        checkboxes.forEach((cb) => { cb.checked = !allChecked; });
+        updateBatchActions();
+    }
+
+    function updateBatchActions() {
+        const checked = document.querySelectorAll(".file-select:checked").length;
+        const dlBtn = els.downloadSelectedBtn();
+        if (dlBtn) {
+            dlBtn.disabled = checked === 0;
+            dlBtn.textContent = checked > 0 ? "Download (" + checked + ")" : "Download";
+        }
     }
 
     // --- File List ---
@@ -405,21 +560,31 @@ const AirBridge = (() => {
 
     function renderFileList(files) {
         const container = els.fileList();
+        const batchActions = els.batchActions();
+
         if (files.length === 0) {
             container.innerHTML = '<p class="empty-state">No files yet. Send files from your device!</p>';
+            if (batchActions) batchActions.hidden = true;
             return;
         }
 
-        container.innerHTML = files.map((f) => `
-            <div class="file-item">
-                <span class="file-icon">${getFileIcon(f.name)}</span>
-                <div class="file-info">
-                    <div class="file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
-                    <div class="file-size">${formatSize(f.size)}</div>
-                </div>
-                <button class="file-download" data-filename="${escapeHtml(f.name)}">Download</button>
-            </div>
-        `).join("");
+        if (batchActions) batchActions.hidden = false;
+
+        container.innerHTML = files.map((f) => {
+            const previewHtml = isImageFile(f.name)
+                ? '<img class="file-thumbnail" src="/api/files/' + encodeURIComponent(f.name) + '?session_id=' + encodeURIComponent(sessionId) + '" alt="preview" loading="lazy">'
+                : '<span class="file-icon">' + getFileIcon(f.name) + '</span>';
+
+            return '<div class="file-item">' +
+                '<input type="checkbox" class="file-select" data-filename="' + escapeHtml(f.name) + '">' +
+                previewHtml +
+                '<div class="file-info">' +
+                    '<div class="file-name" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</div>' +
+                    '<div class="file-size">' + formatSize(f.size) + '</div>' +
+                '</div>' +
+                '<button class="file-download" data-filename="' + escapeHtml(f.name) + '">Download</button>' +
+            '</div>';
+        }).join("");
 
         // Attach download handlers
         container.querySelectorAll(".file-download").forEach((btn) => {
@@ -428,15 +593,13 @@ const AirBridge = (() => {
                 downloadFile(filename);
             });
         });
-    }
 
-    function downloadFile(filename) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        // Attach checkbox change handlers
+        container.querySelectorAll(".file-select").forEach((cb) => {
+            cb.addEventListener("change", updateBatchActions);
+        });
 
-        ws.send(JSON.stringify({
-            type: "download_request",
-            filename: filename,
-        }));
+        updateBatchActions();
     }
 
     // --- UI Helpers ---
@@ -531,6 +694,12 @@ const AirBridge = (() => {
 
         // Refresh files
         els.refreshFiles().addEventListener("click", loadFileList);
+
+        // Batch download controls
+        const selectAllBtn = els.selectAllBtn();
+        if (selectAllBtn) selectAllBtn.addEventListener("click", toggleSelectAll);
+        const dlSelectedBtn = els.downloadSelectedBtn();
+        if (dlSelectedBtn) dlSelectedBtn.addEventListener("click", downloadSelected);
 
         // Keep alive ping
         setInterval(() => {
