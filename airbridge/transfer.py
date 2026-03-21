@@ -308,9 +308,11 @@ class TransferManager:
             return files
         for p in sorted(self._downloads_dir.iterdir()):
             if p.is_file():
+                stat = p.stat()
                 files.append({
                     "name": p.name,
-                    "size": p.stat().st_size,
+                    "size": stat.st_size,
+                    "modified_at": stat.st_mtime,
                     "path": str(p),
                 })
         return files
