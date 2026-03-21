@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel>=0.41.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airbridge"
+version = "1.0.0"
+description = "Wireless file transfer between Windows PC and iPhone via local Wi-Fi — no internet required"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "AirBridge Contributors"},
+]
+keywords = ["file-transfer", "wireless", "wifi", "airdrop", "cross-platform"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: File Sharing",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "aiohttp==3.13.3",
+    "zeroconf==0.136.2",
+    "cryptography==46.0.5",
+    "qrcode==8.0",
+    "Pillow==11.1.0",
+]
+
+[project.scripts]
+airbridge = "airbridge.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.0",
+    "pytest-aiohttp==1.0.5",
+    "ruff==0.8.6",
+    "mypy==1.14.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["airbridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

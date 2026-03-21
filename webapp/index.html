@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a1a">
+    <title>AirBridge</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Auth Screen -->
+        <div id="auth-screen" class="screen active">
+            <div class="logo-container">
+                <div class="logo-icon">✈</div>
+                <h1>AirBridge</h1>
+                <p class="subtitle">Wireless File Transfer</p>
+            </div>
+            <div class="auth-form">
+                <label for="pin-input">Enter Connection PIN</label>
+                <div class="pin-input-group">
+                    <input type="tel" id="pin-input" maxlength="6" placeholder="000000"
+                           autocomplete="off" inputmode="numeric" pattern="[0-9]*">
+                    <button id="connect-btn" class="btn btn-primary">Connect</button>
+                </div>
+                <p id="auth-error" class="error-text" hidden>Invalid PIN. Please try again.</p>
+                <p class="hint-text">Check the PIN displayed on the PC running AirBridge</p>
+            </div>
+            <div id="server-info" class="server-info" hidden>
+                <p>Connected to: <span id="server-url"></span></p>
+            </div>
+        </div>
+
+        <!-- Main Screen -->
+        <div id="main-screen" class="screen">
+            <header class="app-header">
+                <div class="header-left">
+                    <span class="logo-small">✈</span>
+                    <span class="header-title">AirBridge</span>
+                </div>
+                <div class="header-right">
+                    <span id="connection-status" class="status-dot connected"></span>
+                    <button id="disconnect-btn" class="btn btn-ghost btn-sm">Disconnect</button>
+                </div>
+            </header>
+
+            <!-- Tab Navigation -->
+            <nav class="tab-nav">
+                <button class="tab-btn active" data-tab="send">Send Files</button>
+                <button class="tab-btn" data-tab="receive">Received</button>
+            </nav>
+
+            <!-- Send Tab -->
+            <div id="tab-send" class="tab-content active">
+                <div id="drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <div class="drop-icon">📁</div>
+                        <p class="drop-text">Tap to select files or drag &amp; drop</p>
+                        <p class="drop-hint">Any file type, up to 10 GB</p>
+                    </div>
+                    <input type="file" id="file-input" multiple hidden>
+                </div>
+
+                <!-- Transfer Queue -->
+                <div id="transfer-queue" class="transfer-queue" hidden>
+                    <h3>Transfers</h3>
+                    <div id="transfer-list"></div>
+                </div>
+            </div>
+
+            <!-- Receive Tab -->
+            <div id="tab-receive" class="tab-content">
+                <div class="file-list-header">
+                    <h3>Files on PC</h3>
+                    <button id="refresh-files" class="btn btn-ghost btn-sm">↻ Refresh</button>
+                </div>
+                <div id="file-list" class="file-list">
+                    <p class="empty-state">No files yet. Send files from your device!</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
