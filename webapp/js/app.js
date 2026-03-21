@@ -121,7 +121,7 @@ const AirBridge = (() => {
                     const ctx = canvas.getContext("2d");
                     ctx.imageSmoothingEnabled = false;
                     ctx.drawImage(img, 0, 0, w, h);
-                    resolve(canvas.toDataURL("image/png", 0.6));
+                    resolve(canvas.toDataURL("image/jpeg", 0.5));
                 };
                 img.onerror = () => resolve(null);
                 img.src = e.target.result;
