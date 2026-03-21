@@ -252,15 +252,15 @@ const AirBridge = (() => {
     }
 
     // --- File Upload (Queue-based) ---
-    function handleFiles(files) {
+    async function handleFiles(files) {
         if (!authenticated || !ws || ws.readyState !== WebSocket.OPEN) {
             console.error("[AirBridge] Not connected");
             return;
         }
 
-        // Add all files to the queue
+        // Add all files to the queue (await each to ensure thumbnails are generated)
         for (const file of files) {
-            addToUploadQueue(file);
+            await addToUploadQueue(file);
         }
 
         // Start processing if not already uploading
@@ -544,6 +544,9 @@ const AirBridge = (() => {
     }
 
     // --- File List ---
+    let currentSortField = "date"; // "date", "size", "type", "name"
+    let currentSortOrder = "desc"; // "asc", "desc"
+
     async function loadFileList() {
         if (!sessionId) return;
 
@@ -558,6 +561,48 @@ const AirBridge = (() => {
         }
     }
 
+    function sortFiles(files) {
+        const sorted = [...files];
+        sorted.sort((a, b) => {
+            let cmp = 0;
+            switch (currentSortField) {
+                case "date":
+                    cmp = (a.modified_at || 0) - (b.modified_at || 0);
+                    break;
+                case "size":
+                    cmp = a.size - b.size;
+                    break;
+                case "type": {
+                    const extA = a.name.includes(".") ? a.name.split(".").pop().toLowerCase() : "";
+                    const extB = b.name.includes(".") ? b.name.split(".").pop().toLowerCase() : "";
+                    cmp = extA.localeCompare(extB);
+                    break;
+                }
+                case "name":
+                    cmp = a.name.localeCompare(b.name);
+                    break;
+            }
+            return currentSortOrder === "asc" ? cmp : -cmp;
+        });
+        return sorted;
+    }
+
+    function formatDate(timestamp) {
+        if (!timestamp) return "";
+        const d = new Date(timestamp * 1000);
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const fileDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        const diffDays = Math.floor((today - fileDay) / (1000 * 60 * 60 * 24));
+
+        const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        if (diffDays === 0) return "Today, " + time;
+        if (diffDays === 1) return "Yesterday, " + time;
+        if (diffDays < 7) return diffDays + "d ago, " + time;
+        return d.toLocaleDateString([], { month: "short", day: "numeric" }) + ", " + time;
+    }
+
     function renderFileList(files) {
         const container = els.fileList();
         const batchActions = els.batchActions();
@@ -570,19 +615,29 @@ const AirBridge = (() => {
 
         if (batchActions) batchActions.hidden = false;
 
-        container.innerHTML = files.map((f) => {
+        // Sort files
+        const sorted = sortFiles(files);
+
+        container.innerHTML = sorted.map((f) => {
             const previewHtml = isImageFile(f.name)
                 ? '<img class="file-thumbnail" src="/api/files/' + encodeURIComponent(f.name) + '?session_id=' + encodeURIComponent(sessionId) + '" alt="preview" loading="lazy">'
                 : '<span class="file-icon">' + getFileIcon(f.name) + '</span>';
+
+            const dateHtml = f.modified_at
+                ? '<span class="file-date">' + formatDate(f.modified_at) + '</span>'
+                : '';
 
             return '<div class="file-item">' +
                 '<input type="checkbox" class="file-select" data-filename="' + escapeHtml(f.name) + '">' +
                 previewHtml +
                 '<div class="file-info">' +
                     '<div class="file-name" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</div>' +
-                    '<div class="file-size">' + formatSize(f.size) + '</div>' +
+                    '<div class="file-meta">' +
+                        '<span class="file-size">' + formatSize(f.size) + '</span>' +
+                        dateHtml +
+                    '</div>' +
                 '</div>' +
-                '<button class="file-download" data-filename="' + escapeHtml(f.name) + '">Download</button>' +
+                '<button class="file-download" data-filename="' + escapeHtml(f.name) + '" aria-label="Download ' + escapeHtml(f.name) + '">⬇</button>' +
             '</div>';
         }).join("");
 
@@ -694,6 +749,24 @@ const AirBridge = (() => {
 
         // Refresh files
         els.refreshFiles().addEventListener("click", loadFileList);
+
+        // Sort controls
+        const sortSelect = $("#sort-select");
+        if (sortSelect) {
+            sortSelect.addEventListener("change", () => {
+                currentSortField = sortSelect.value;
+                loadFileList();
+            });
+        }
+        const sortOrderBtn = $("#sort-order-btn");
+        if (sortOrderBtn) {
+            sortOrderBtn.addEventListener("click", () => {
+                currentSortOrder = currentSortOrder === "asc" ? "desc" : "asc";
+                sortOrderBtn.textContent = currentSortOrder === "asc" ? "▲" : "▼";
+                sortOrderBtn.title = currentSortOrder === "asc" ? "Ascending" : "Descending";
+                loadFileList();
+            });
+        }
 
         // Batch download controls
         const selectAllBtn = els.selectAllBtn();

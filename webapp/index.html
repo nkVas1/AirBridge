@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#0a0a1a">
+    <meta name="theme-color" content="#0a0a0a">
     <title>AirBridge</title>
     <link rel="manifest" href="/manifest.json">
     <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
@@ -76,7 +76,16 @@
             <div id="tab-receive" class="tab-content">
                 <div class="file-list-header">
                     <h3>Files on PC</h3>
-                    <button id="refresh-files" class="btn btn-ghost btn-sm">↻ Refresh</button>
+                    <div class="file-list-controls">
+                        <select id="sort-select" class="sort-select" title="Sort by">
+                            <option value="date">Date</option>
+                            <option value="size">Size</option>
+                            <option value="type">Type</option>
+                            <option value="name">Name</option>
+                        </select>
+                        <button id="sort-order-btn" class="btn btn-ghost btn-sm sort-order-btn" title="Descending">▼</button>
+                        <button id="refresh-files" class="btn btn-ghost btn-sm">↻</button>
+                    </div>
                 </div>
                 <div id="batch-actions" class="batch-actions" hidden>
                     <button id="select-all-btn" class="btn btn-ghost btn-sm">Select All</button>
