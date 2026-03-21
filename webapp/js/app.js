@@ -573,8 +573,8 @@ const AirBridge = (() => {
                     cmp = a.size - b.size;
                     break;
                 case "type": {
-                    const extA = a.name.split(".").pop().toLowerCase();
-                    const extB = b.name.split(".").pop().toLowerCase();
+                    const extA = a.name.includes(".") ? a.name.split(".").pop().toLowerCase() : "";
+                    const extB = b.name.includes(".") ? b.name.split(".").pop().toLowerCase() : "";
                     cmp = extA.localeCompare(extB);
                     break;
                 }
@@ -637,7 +637,7 @@ const AirBridge = (() => {
                         dateHtml +
                     '</div>' +
                 '</div>' +
-                '<button class="file-download" data-filename="' + escapeHtml(f.name) + '">⬇</button>' +
+                '<button class="file-download" data-filename="' + escapeHtml(f.name) + '" aria-label="Download ' + escapeHtml(f.name) + '">⬇</button>' +
             '</div>';
         }).join("");
 
