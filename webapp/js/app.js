@@ -290,6 +290,7 @@ const AirBridge = (() => {
                     '<span class="transfer-filename" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</span>' +
                     '<span class="transfer-size">' + formatSize(file.size) + '</span>' +
                 '</div>' +
+                '<button class="transfer-cancel-btn" id="' + itemId + '-cancel" title="Cancel">✕</button>' +
             '</div>' +
             '<div class="transfer-progress-bar">' +
                 '<div class="transfer-progress-fill" id="' + itemId + '-bar"></div>' +
@@ -300,11 +301,66 @@ const AirBridge = (() => {
             '</div>';
         els.transferList().prepend(itemEl);
 
+        // Attach cancel handler
+        const cancelBtn = document.getElementById(itemId + "-cancel");
+        if (cancelBtn) {
+            cancelBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                cancelUpload(itemId);
+            });
+        }
+
         // Add to queue (don't send upload_start yet!)
         uploadQueue.push({
             file: file,
             itemId: itemId,
         });
+    }
+
+    function cancelUpload(itemId) {
+        // Check if it's queued (not yet uploading)
+        const queueIndex = uploadQueue.findIndex((item) => item.itemId === itemId);
+        if (queueIndex !== -1) {
+            uploadQueue.splice(queueIndex, 1);
+            removeTransferItem(itemId);
+            return;
+        }
+
+        // Check if it's the current upload
+        if (currentUpload && currentUpload.itemId === itemId) {
+            // Mark as cancelled in UI
+            const bar = document.getElementById(itemId + "-bar");
+            const statusEl = document.getElementById(itemId + "-status");
+            if (bar) bar.classList.add("error");
+            if (statusEl) {
+                statusEl.textContent = "✗ Cancelled";
+                statusEl.classList.add("error");
+            }
+            hideCancelBtn(itemId);
+
+            currentUpload = null;
+            uploadInProgress = false;
+
+            // Process next file in queue
+            processUploadQueue();
+            return;
+        }
+
+        // Already completed/errored — just remove from UI
+        removeTransferItem(itemId);
+    }
+
+    function removeTransferItem(itemId) {
+        const el = document.getElementById(itemId);
+        if (el) {
+            el.style.animation = "fadeOut 0.2s ease";
+            el.addEventListener("animationend", () => el.remove());
+        }
+    }
+
+    function hideCancelBtn(itemId) {
+        const btn = document.getElementById(itemId + "-cancel");
+        if (btn) btn.hidden = true;
     }
 
     function processUploadQueue() {
@@ -412,6 +468,7 @@ const AirBridge = (() => {
             statusEl.classList.add("complete");
         }
         if (speedEl) speedEl.textContent = "";
+        hideCancelBtn(itemId);
 
         currentUpload = null;
         uploadInProgress = false;
@@ -437,6 +494,7 @@ const AirBridge = (() => {
             statusEl.textContent = "✗ " + message;
             statusEl.classList.add("error");
         }
+        hideCancelBtn(itemId);
         currentUpload = null;
         uploadInProgress = false;
 
@@ -724,8 +782,11 @@ const AirBridge = (() => {
 
         fileInput.addEventListener("change", (e) => {
             if (e.target.files.length > 0) {
-                handleFiles(e.target.files);
+                // Copy to static array before clearing the input —
+                // FileList is a live reference that empties when value is reset.
+                const files = Array.from(e.target.files);
                 fileInput.value = "";
+                handleFiles(files);
             }
         });
 

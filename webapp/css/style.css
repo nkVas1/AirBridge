@@ -451,11 +451,45 @@ body {
     to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes fadeOut {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(8px); }
+}
+
 .transfer-header {
     display: flex;
     align-items: center;
     gap: 10px;
     margin-bottom: 8px;
+}
+
+.transfer-cancel-btn {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+    padding: 0;
+    margin-left: auto;
+}
+
+.transfer-cancel-btn:hover {
+    color: var(--red);
+    border-color: var(--red);
+    background: rgba(255, 59, 48, 0.1);
+}
+
+.transfer-cancel-btn[hidden] {
+    display: none;
 }
 
 .transfer-icon {
