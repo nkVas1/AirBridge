@@ -68,7 +68,7 @@ const AirBridge = (() => {
     }
 
     function getFileIcon(filename) {
-        const ext = filename.split(".").pop().toLowerCase();
+        const ext = getFileExt(filename);
         const icons = {
             pdf: "📄", doc: "📝", docx: "📝", txt: "📝",
             jpg: "🖼️", jpeg: "🖼️", png: "🖼️", gif: "🖼️", webp: "🖼️", svg: "🖼️", heic: "🖼️",
@@ -82,9 +82,44 @@ const AirBridge = (() => {
         return icons[ext] || "📎";
     }
 
+    function getFileExt(filename) {
+        return filename.split(".").pop().toLowerCase();
+    }
+
     function isImageFile(filename) {
-        const ext = filename.split(".").pop().toLowerCase();
-        return IMAGE_EXTENSIONS.has(ext);
+        return IMAGE_EXTENSIONS.has(getFileExt(filename));
+    }
+
+    const VIDEO_EXTENSIONS = new Set([
+        "mp4", "webm", "ogg", "mov",
+    ]);
+
+    const AUDIO_EXTENSIONS = new Set([
+        "mp3", "wav", "ogg", "flac", "aac", "m4a", "webm",
+    ]);
+
+    const TEXT_EXTENSIONS = new Set([
+        "txt", "md", "json", "js", "ts", "py", "html", "css", "xml",
+        "csv", "yaml", "yml", "toml", "ini", "cfg", "conf", "log",
+        "sh", "bash", "zsh", "bat", "ps1", "rb", "go", "rs",
+        "java", "c", "cpp", "h", "hpp", "cs", "swift", "kt",
+        "sql", "graphql", "dockerfile", "makefile", "gitignore",
+    ]);
+
+    function isVideoFile(filename) {
+        return VIDEO_EXTENSIONS.has(getFileExt(filename));
+    }
+
+    function isAudioFile(filename) {
+        return AUDIO_EXTENSIONS.has(getFileExt(filename));
+    }
+
+    function isTextFile(filename) {
+        return TEXT_EXTENSIONS.has(getFileExt(filename));
+    }
+
+    function isPdfFile(filename) {
+        return getFileExt(filename) === "pdf";
     }
 
     function generateSessionId() {
@@ -712,7 +747,121 @@ const AirBridge = (() => {
             cb.addEventListener("change", updateBatchActions);
         });
 
+        // Attach preview handlers on file icons and thumbnails
+        container.querySelectorAll(".file-icon, .file-thumbnail").forEach((el) => {
+            const fileItem = el.closest(".file-item");
+            if (!fileItem) return;
+            const checkbox = fileItem.querySelector(".file-select");
+            if (!checkbox) return;
+            el.addEventListener("click", (e) => {
+                e.stopPropagation();
+                openPreviewModal(checkbox.dataset.filename);
+            });
+        });
+
         updateBatchActions();
+    }
+
+    // --- File Preview Modal ---
+    function openPreviewModal(filename) {
+        const modal = $("#preview-modal");
+        const content = $("#preview-content");
+        const filenameEl = $("#preview-filename");
+
+        if (!modal || !content) return;
+
+        filenameEl.textContent = filename;
+        content.replaceChildren();
+        const loadingSpan = document.createElement("span");
+        loadingSpan.className = "preview-loading";
+        loadingSpan.textContent = "Loading...";
+        content.appendChild(loadingSpan);
+        modal.hidden = false;
+        modal.classList.remove("fullscreen");
+        document.body.style.overflow = "hidden";
+
+        const fileUrl = "/api/files/" + encodeURIComponent(filename) + "?session_id=" + encodeURIComponent(sessionId);
+
+        if (isImageFile(filename)) {
+            const img = document.createElement("img");
+            img.alt = filename;
+            img.src = fileUrl;
+            img.onload = () => { content.replaceChildren(img); };
+            img.onerror = () => { showPreviewError(content, filename); };
+        } else if (isVideoFile(filename)) {
+            const video = document.createElement("video");
+            video.controls = true;
+            video.preload = "metadata";
+            video.src = fileUrl;
+            video.onerror = () => { showPreviewError(content, filename); };
+            content.replaceChildren(video);
+        } else if (isAudioFile(filename)) {
+            const audio = document.createElement("audio");
+            audio.controls = true;
+            audio.preload = "metadata";
+            audio.src = fileUrl;
+            audio.onerror = () => { showPreviewError(content, filename); };
+            content.replaceChildren(audio);
+        } else if (isPdfFile(filename)) {
+            const iframe = document.createElement("iframe");
+            iframe.className = "preview-pdf";
+            iframe.src = fileUrl;
+            content.replaceChildren(iframe);
+        } else if (isTextFile(filename)) {
+            fetch(fileUrl, { method: "HEAD" })
+                .then((headResp) => {
+                    const size = parseInt(headResp.headers.get("Content-Length") || "0", 10);
+                    // Limit text preview to 5 MB
+                    if (size > 5 * 1024 * 1024) {
+                        showPreviewError(content, filename);
+                        return;
+                    }
+                    return fetch(fileUrl);
+                })
+                .then((resp) => {
+                    if (!resp || !resp.ok) throw new Error("Failed to load");
+                    return resp.text();
+                })
+                .then((text) => {
+                    if (text === undefined) return;
+                    const pre = document.createElement("pre");
+                    pre.textContent = text;
+                    content.replaceChildren(pre);
+                })
+                .catch(() => { showPreviewError(content, filename); });
+        } else {
+            showPreviewError(content, filename);
+        }
+    }
+
+    function showPreviewError(container, filename) {
+        container.innerHTML =
+            '<div class="preview-unsupported">' +
+                '<span class="preview-unsupported-icon">' + getFileIcon(filename) + '</span>' +
+                'Preview not available for this file type.<br>' +
+                'Use the download button to save it.' +
+            '</div>';
+    }
+
+    function closePreviewModal() {
+        const modal = $("#preview-modal");
+        if (!modal || modal.hidden) return;
+
+        // Pause any playing media
+        const video = modal.querySelector("video");
+        const audio = modal.querySelector("audio");
+        if (video) video.pause();
+        if (audio) audio.pause();
+
+        modal.hidden = true;
+        modal.classList.remove("fullscreen");
+        document.body.style.overflow = "";
+    }
+
+    function togglePreviewFullscreen() {
+        const modal = $("#preview-modal");
+        if (!modal || modal.hidden) return;
+        modal.classList.toggle("fullscreen");
     }
 
     // --- UI Helpers ---
@@ -841,6 +990,21 @@ const AirBridge = (() => {
                 ws.send(JSON.stringify({ type: "ping" }));
             }
         }, 30000);
+
+        // Preview modal controls
+        const previewCloseBtn = $("#preview-close-btn");
+        if (previewCloseBtn) previewCloseBtn.addEventListener("click", closePreviewModal);
+
+        const previewFullscreenBtn = $("#preview-fullscreen-btn");
+        if (previewFullscreenBtn) previewFullscreenBtn.addEventListener("click", togglePreviewFullscreen);
+
+        const previewOverlay = $(".preview-overlay");
+        if (previewOverlay) previewOverlay.addEventListener("click", closePreviewModal);
+
+        document.addEventListener("keydown", (e) => {
+            const modal = $("#preview-modal");
+            if (e.key === "Escape" && modal && !modal.hidden) closePreviewModal();
+        });
 
         console.log("[AirBridge] Initialized");
     }
