@@ -98,6 +98,21 @@
         </div>
     </div>
 
+    <!-- File Preview Modal -->
+    <div id="preview-modal" class="preview-modal" hidden>
+        <div class="preview-overlay"></div>
+        <div class="preview-container">
+            <div class="preview-toolbar">
+                <span class="preview-filename" id="preview-filename"></span>
+                <div class="preview-toolbar-actions">
+                    <button class="preview-btn" id="preview-fullscreen-btn" title="Fullscreen">⛶</button>
+                    <button class="preview-btn preview-close-btn" id="preview-close-btn" title="Close">✕</button>
+                </div>
+            </div>
+            <div class="preview-content" id="preview-content"></div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
 </body>
 </html>
