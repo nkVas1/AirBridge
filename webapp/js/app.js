@@ -920,8 +920,8 @@ const AirBridge = (() => {
             }
         `;
         document.body.appendChild(script);
-        // Clean up the inline script element after execution
-        setTimeout(() => script.remove(), 100);
+        // Module scripts run asynchronously; remove the element after it has been queued.
+        setTimeout(() => script.remove(), 0);
     }
 
     function showPreviewError(container, filename) {
