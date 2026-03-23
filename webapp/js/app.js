@@ -46,6 +46,7 @@ const AirBridge = (() => {
     // Image extensions for preview generation
     const IMAGE_EXTENSIONS = new Set([
         "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "svg",
+        "jfif", "tiff", "tif", "avif", "heif", "heic",
     ]);
 
     // --- Utilities ---
@@ -72,7 +73,9 @@ const AirBridge = (() => {
         const icons = {
             pdf: "📄", doc: "📝", docx: "📝", txt: "📝",
             jpg: "🖼️", jpeg: "🖼️", png: "🖼️", gif: "🖼️", webp: "🖼️", svg: "🖼️", heic: "🖼️",
-            mp4: "🎬", mov: "🎬", avi: "🎬", mkv: "🎬",
+            jfif: "🖼️", tiff: "🖼️", tif: "🖼️", avif: "🖼️", heif: "🖼️",
+            mp4: "🎬", mov: "🎬", avi: "🎬", mkv: "🎬", webm: "🎬", m4v: "🎬",
+            flv: "🎬", wmv: "🎬", "3gp": "🎬", ts: "🎬",
             mp3: "🎵", wav: "🎵", flac: "🎵", aac: "🎵", m4a: "🎵",
             zip: "📦", rar: "📦", "7z": "📦", tar: "📦", gz: "📦",
             html: "🌐", css: "🎨", js: "⚙️", py: "🐍", json: "📋",
@@ -91,7 +94,8 @@ const AirBridge = (() => {
     }
 
     const VIDEO_EXTENSIONS = new Set([
-        "mp4", "webm", "ogg", "mov",
+        "mp4", "webm", "ogg", "mov", "mkv", "avi", "m4v", "3gp",
+        "flv", "wmv", "ts", "mts", "m2ts",
     ]);
 
     const AUDIO_EXTENSIONS = new Set([
@@ -791,7 +795,8 @@ const AirBridge = (() => {
         } else if (isVideoFile(filename)) {
             const video = document.createElement("video");
             video.controls = true;
-            video.preload = "metadata";
+            video.playsInline = true;
+            video.preload = "auto";
             video.src = fileUrl;
             video.onerror = () => { showPreviewError(content, filename); };
             content.replaceChildren(video);
@@ -803,10 +808,7 @@ const AirBridge = (() => {
             audio.onerror = () => { showPreviewError(content, filename); };
             content.replaceChildren(audio);
         } else if (isPdfFile(filename)) {
-            const iframe = document.createElement("iframe");
-            iframe.className = "preview-pdf";
-            iframe.src = fileUrl;
-            content.replaceChildren(iframe);
+            renderPdfPreview(content, fileUrl, filename);
         } else if (isTextFile(filename)) {
             fetch(fileUrl, { method: "HEAD" })
                 .then((headResp) => {
@@ -834,6 +836,94 @@ const AirBridge = (() => {
         }
     }
 
+    // --- PDF Preview with pdf.js ---
+    function renderPdfPreview(container, fileUrl, filename) {
+        const script = document.createElement("script");
+        script.type = "module";
+        script.textContent = `
+            import { GlobalWorkerOptions, getDocument } from "/static/js/vendor/pdf.min.mjs";
+            GlobalWorkerOptions.workerSrc = "/static/js/vendor/pdf.worker.min.mjs";
+
+            const container = document.getElementById("preview-content");
+            const url = ${JSON.stringify(fileUrl)};
+
+            try {
+                const pdf = await getDocument(url).promise;
+                const totalPages = pdf.numPages;
+
+                // Build viewer UI
+                const wrapper = document.createElement("div");
+                wrapper.className = "pdf-viewer";
+
+                const navBar = document.createElement("div");
+                navBar.className = "pdf-nav";
+
+                const prevBtn = document.createElement("button");
+                prevBtn.className = "preview-btn pdf-nav-btn";
+                prevBtn.textContent = "◀";
+                prevBtn.title = "Previous page";
+
+                const pageInfo = document.createElement("span");
+                pageInfo.className = "pdf-page-info";
+
+                const nextBtn = document.createElement("button");
+                nextBtn.className = "preview-btn pdf-nav-btn";
+                nextBtn.textContent = "▶";
+                nextBtn.title = "Next page";
+
+                navBar.append(prevBtn, pageInfo, nextBtn);
+
+                const canvasContainer = document.createElement("div");
+                canvasContainer.className = "pdf-canvas-container";
+
+                const canvas = document.createElement("canvas");
+                canvas.className = "pdf-canvas";
+                canvasContainer.appendChild(canvas);
+
+                wrapper.append(navBar, canvasContainer);
+                container.replaceChildren(wrapper);
+
+                let currentPage = 1;
+                const ctx = canvas.getContext("2d");
+
+                async function renderPage(num) {
+                    const page = await pdf.getPage(num);
+                    const containerWidth = canvasContainer.clientWidth || 800;
+                    const baseViewport = page.getViewport({ scale: 1 });
+                    const scale = Math.min(containerWidth / baseViewport.width, 3);
+                    const viewport = page.getViewport({ scale });
+
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+
+                    await page.render({ canvasContext: ctx, viewport }).promise;
+                    pageInfo.textContent = num + " / " + totalPages;
+                    prevBtn.disabled = num <= 1;
+                    nextBtn.disabled = num >= totalPages;
+                }
+
+                prevBtn.addEventListener("click", () => {
+                    if (currentPage > 1) { currentPage--; renderPage(currentPage); }
+                });
+                nextBtn.addEventListener("click", () => {
+                    if (currentPage < totalPages) { currentPage++; renderPage(currentPage); }
+                });
+
+                renderPage(1);
+            } catch (err) {
+                container.innerHTML =
+                    '<div class="preview-unsupported">' +
+                        '<span class="preview-unsupported-icon">📄</span>' +
+                        'Preview not available for this file type.<br>' +
+                        'Use the download button to save it.' +
+                    '</div>';
+            }
+        `;
+        document.body.appendChild(script);
+        // Module scripts run asynchronously; remove the element after it has been queued.
+        setTimeout(() => script.remove(), 0);
+    }
+
     function showPreviewError(container, filename) {
         container.innerHTML =
             '<div class="preview-unsupported">' +
@@ -850,8 +940,8 @@ const AirBridge = (() => {
         // Pause any playing media
         const video = modal.querySelector("video");
         const audio = modal.querySelector("audio");
-        if (video) video.pause();
-        if (audio) audio.pause();
+        if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
+        if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
 
         modal.hidden = true;
         modal.classList.remove("fullscreen");
