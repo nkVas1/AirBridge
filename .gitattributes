@@ -1,0 +1,2 @@
+# Vendor libraries — treat as binary for diffs
+webapp/js/vendor/*.mjs binary linguist-vendored
