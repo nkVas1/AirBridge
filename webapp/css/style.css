@@ -951,6 +951,61 @@ body {
     background: #fff;
 }
 
+/* PDF.js canvas viewer */
+.pdf-viewer {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    max-height: calc(90vh - 84px);
+}
+
+.pdf-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px;
+    flex-shrink: 0;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.pdf-nav-btn {
+    min-width: 32px;
+}
+
+.pdf-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.pdf-page-info {
+    font-size: 11px;
+    color: var(--green);
+    letter-spacing: 1px;
+    font-weight: 600;
+    min-width: 60px;
+    text-align: center;
+}
+
+.pdf-canvas-container {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    background: #2a2a2a;
+    -webkit-overflow-scrolling: touch;
+}
+
+.pdf-canvas {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
 .preview-content pre {
     width: 100%;
     max-height: calc(90vh - 84px);
@@ -1020,6 +1075,10 @@ body {
 
 .preview-modal.fullscreen .preview-content iframe.preview-pdf {
     height: calc(100vh - 84px);
+}
+
+.preview-modal.fullscreen .pdf-viewer {
+    max-height: calc(100vh - 84px);
 }
 
 /* Make file icons/thumbnails clickable */

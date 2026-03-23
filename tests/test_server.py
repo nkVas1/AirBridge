@@ -113,6 +113,44 @@ class TestFilesEndpoint:
         assert "files" in data
 
 
+class TestMimeTypes:
+    def test_extra_mime_types_registered(self) -> None:
+        """Ensure custom MIME types are available after server module import."""
+        import mimetypes
+
+        # Importing the server module registers the extra types
+        import airbridge.server  # noqa: F401
+
+        assert mimetypes.guess_type("video.mkv")[0] == "video/x-matroska"
+        assert mimetypes.guess_type("photo.jfif")[0] == "image/jpeg"
+        assert mimetypes.guess_type("photo.avif")[0] == "image/avif"
+        assert mimetypes.guess_type("photo.heic")[0] == "image/heic"
+        assert mimetypes.guess_type("clip.m4v")[0] == "video/mp4"
+        assert mimetypes.guess_type("clip.3gp")[0] == "video/3gpp"
+        assert mimetypes.guess_type("clip.flv")[0] == "video/x-flv"
+        assert mimetypes.guess_type("clip.wmv")[0] == "video/x-ms-wmv"
+
+    async def test_download_mkv_content_type(self, client: TestClient, app) -> None:
+        """Verify .mkv file is served with correct Content-Type."""
+        pin = app["auth"].pin
+        config: Config = app["config"]
+
+        # Create a dummy .mkv file
+        config.downloads_dir.mkdir(parents=True, exist_ok=True)
+        (config.downloads_dir / "test.mkv").write_bytes(b"\x1a\x45\xdf\xa3")
+
+        await client.post(
+            "/api/auth",
+            json={"pin": pin, "session_id": "mime-test"},
+        )
+        resp = await client.get(
+            "/api/files/test.mkv",
+            headers={"X-Session-ID": "mime-test"},
+        )
+        assert resp.status == 200
+        assert "matroska" in resp.content_type
+
+
 class TestWebSocket:
     async def test_auth_flow(self, client: TestClient, app) -> None:
         pin = app["auth"].pin

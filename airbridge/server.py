@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import secrets
 import uuid
 from pathlib import Path
@@ -27,6 +28,36 @@ from airbridge.transfer import TransferManager, TransferState
 logger = logging.getLogger(__name__)
 
 WEBAPP_DIR = Path(__file__).parent.parent / "webapp"
+
+# Register additional MIME types for formats not always in the default database.
+_EXTRA_MIME_TYPES: dict[str, str] = {
+    ".mkv": "video/x-matroska",
+    ".mk3d": "video/x-matroska-3d",
+    ".mka": "audio/x-matroska",
+    ".jfif": "image/jpeg",
+    ".avif": "image/avif",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".m4v": "video/mp4",
+    ".3gp": "video/3gpp",
+    ".flv": "video/x-flv",
+    ".wmv": "video/x-ms-wmv",
+    ".ts": "video/mp2t",
+    ".mts": "video/mp2t",
+    ".m2ts": "video/mp2t",
+    ".mjs": "application/javascript",
+}
+for _ext, _mime in _EXTRA_MIME_TYPES.items():
+    mimetypes.add_type(_mime, _ext)
+
+
+def _guess_content_type(file_path: Path) -> str:
+    """Guess the MIME content type for a file, with fallback to extended types."""
+    ct, _ = mimetypes.guess_type(file_path.name)
+    if ct:
+        return ct
+    ext = file_path.suffix.lower()
+    return _EXTRA_MIME_TYPES.get(ext, "application/octet-stream")
 
 
 def create_app(config: Config) -> web.Application:
@@ -214,7 +245,11 @@ async def handle_download_file(request: web.Request) -> web.Response:
     if not file_path.is_file():
         return web.json_response({"error": "File not found"}, status=404)
 
-    return web.FileResponse(file_path)
+    content_type = _guess_content_type(file_path)
+    return web.FileResponse(
+        file_path,
+        headers={"Content-Type": content_type},
+    )
 
 
 async def handle_transfers(request: web.Request) -> web.Response:
