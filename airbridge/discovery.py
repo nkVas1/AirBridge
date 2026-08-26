@@ -6,7 +6,8 @@ import logging
 import socket
 from typing import Any
 
-from zeroconf import ServiceInfo, Zeroconf
+from zeroconf import ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
 
 from airbridge import __version__
 
@@ -35,7 +36,13 @@ def get_local_ip() -> str:
 
 
 class ServiceDiscovery:
-    """Manages mDNS/Bonjour service registration and teardown."""
+    """Manages mDNS/Bonjour service registration and teardown.
+
+    Registration goes through zeroconf's asyncio interface. The
+    synchronous one drives its own event loop from a worker thread and
+    raises `EventLoopBlocked` when called from inside a running loop,
+    which is exactly where an aiohttp startup hook lives.
+    """
 
     def __init__(
         self,
@@ -48,7 +55,7 @@ class ServiceDiscovery:
         self._service_type = service_type
         self._port = port
         self._scheme = scheme
-        self._zeroconf: Zeroconf | None = None
+        self._zeroconf: AsyncZeroconf | None = None
         self._info: ServiceInfo | None = None
 
     @property
@@ -56,26 +63,25 @@ class ServiceDiscovery:
         """Return the detected local IP address."""
         return get_local_ip()
 
-    def register(self) -> str:
+    async def register(self) -> str:
         """Register the service via mDNS/Bonjour.
 
         Returns:
             The local IP address where the service is available.
         """
         ip = self.local_ip
-        parsed = socket.inet_aton(ip)
 
         self._info = ServiceInfo(
             type_=self._service_type,
             name=f"{self._service_name}.{self._service_type}",
-            addresses=[parsed],
+            addresses=[socket.inet_aton(ip)],
             port=self._port,
             properties=self._build_properties(ip),
             server=f"{self._service_name.lower()}.local.",
         )
 
-        self._zeroconf = Zeroconf()
-        self._zeroconf.register_service(self._info)
+        self._zeroconf = AsyncZeroconf()
+        await self._zeroconf.async_register_service(self._info)
         logger.info(
             "mDNS service registered: %s at %s:%d",
             self._service_name,
@@ -84,11 +90,12 @@ class ServiceDiscovery:
         )
         return ip
 
-    def unregister(self) -> None:
+    async def unregister(self) -> None:
         """Unregister the service and shut down mDNS."""
-        if self._zeroconf and self._info:
-            self._zeroconf.unregister_service(self._info)
-            self._zeroconf.close()
+        if self._zeroconf is not None:
+            if self._info is not None:
+                await self._zeroconf.async_unregister_service(self._info)
+            await self._zeroconf.async_close()
             logger.info("mDNS service unregistered")
         self._zeroconf = None
         self._info = None
