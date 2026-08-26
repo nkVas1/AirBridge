@@ -181,6 +181,11 @@ Named here rather than discovered later:
 - **mDNS is best-effort.** `airbridge.local` fails to register on some
   Windows setups; the server logs a warning and carries on, and the
   numeric address in the banner always works.
+- **Run it from the checkout, not from `pip install`.** `webapp/` sits
+  outside the Python package, so an installed wheel has the server but
+  none of the web interface, and the `airbridge` console script it puts
+  on PATH answers with a plain-text placeholder. Packaging the assets
+  properly means moving them into the package.
 - `crypto.py` still carries AES-GCM helpers that nothing calls. Transport
   security is TLS; those functions are vestigial.
 - **None of this has been security-audited.** It is one person's tool,

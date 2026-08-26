@@ -52,6 +52,11 @@ implements them or stops claiming them.
 - Repository author fields corrected from `nkVasi` to `nkVas1` — the
   old spelling linked to a profile that does not exist.
 
+### Known to be still broken
+
+- `webapp/` is not part of the Python package, so `pip install` yields a
+  server without a web interface. Run from a checkout instead.
+
 ## [1.0.0] — 2026-05-23
 
 First working version: chunked WebSocket transfer in both directions,
