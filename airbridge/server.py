@@ -4,16 +4,18 @@ Provides:
 - Static file serving for the PWA web interface
 - REST API for device info, file listing, authentication
 - WebSocket endpoint for chunked file transfer with progress
-- QR code endpoint for easy mobile connection
+- QR code and certificate endpoints for easy mobile pairing
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
 import mimetypes
+import ssl
 import sys
 import uuid
 from pathlib import Path
@@ -25,12 +27,18 @@ from airbridge import __version__
 from airbridge.auth import AuthManager
 from airbridge.config import Config
 from airbridge.discovery import ServiceDiscovery, get_local_ip
-from airbridge.tls import build_ssl_context, certificate_fingerprint, ensure_certificate
+from airbridge.tls import (
+    CertificatePaths,
+    build_ssl_context,
+    certificate_der,
+    certificate_fingerprint,
+    ensure_certificates,
+)
 from airbridge.transfer import TransferManager, TransferState
 
 logger = logging.getLogger(__name__)
 
-WEBAPP_DIR = Path(__file__).parent.parent / "webapp"
+WEBAPP_DIR = Path(__file__).parent / "webapp"
 
 # Register additional MIME types for formats not always in the default database.
 _EXTRA_MIME_TYPES: dict[str, str] = {
@@ -56,11 +64,10 @@ for _ext, _mime in _EXTRA_MIME_TYPES.items():
 
 def _guess_content_type(file_path: Path) -> str:
     """Guess the MIME content type for a file, with fallback to extended types."""
-    ct, _ = mimetypes.guess_type(file_path.name)
-    if ct:
-        return ct
-    ext = file_path.suffix.lower()
-    return _EXTRA_MIME_TYPES.get(ext, "application/octet-stream")
+    content_type, _ = mimetypes.guess_type(file_path.name)
+    if content_type:
+        return content_type
+    return _EXTRA_MIME_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
 
 
 def create_app(config: Config) -> web.Application:
@@ -85,6 +92,7 @@ def create_app(config: Config) -> web.Application:
         port=config.port,
         scheme=config.scheme,
     )
+    app["certificates"] = None
 
     # Register routes
     app.router.add_get("/", handle_index)
@@ -94,6 +102,7 @@ def create_app(config: Config) -> web.Application:
     app.router.add_get("/api/files", handle_files)
     app.router.add_get("/api/files/{filename}", handle_download_file)
     app.router.add_get("/api/transfers", handle_transfers)
+    app.router.add_get("/ca.crt", handle_ca_certificate)
     app.router.add_get("/ws", handle_websocket)
 
     # Serve static webapp files
@@ -152,20 +161,22 @@ async def on_startup(app: web.Application) -> None:
     """Register mDNS service on startup."""
     discovery: ServiceDiscovery = app["discovery"]
     try:
-        ip = discovery.register()
+        ip = await discovery.register()
         logger.info("AirBridge available at %s", app["config"].url_for(ip))
     except Exception:
         logger.warning("mDNS registration failed — manual IP entry required", exc_info=True)
 
 
 async def on_shutdown(app: web.Application) -> None:
-    """Unregister mDNS service on shutdown."""
+    """Unregister mDNS and release open files on shutdown."""
     discovery: ServiceDiscovery = app["discovery"]
-    discovery.unregister()
-    # Clean up active transfers
+    try:
+        await discovery.unregister()
+    except Exception:
+        logger.debug("mDNS teardown failed", exc_info=True)
+    # Partial uploads stay on disk so they can be continued later.
     transfer_mgr: TransferManager = app["transfer_manager"]
-    for tid in list(transfer_mgr.active_transfers.keys()):
-        transfer_mgr.cancel_transfer(tid)
+    transfer_mgr.close_all()
 
 
 # --- HTTP Handlers ---
@@ -183,7 +194,7 @@ async def handle_index(request: web.Request) -> web.StreamResponse:
 
 
 async def handle_info(request: web.Request) -> web.Response:
-    """Return server information."""
+    """Return server information, including every address it answers on."""
     config: Config = request.app["config"]
     ip = get_local_ip()
     return web.json_response({
@@ -194,6 +205,7 @@ async def handle_info(request: web.Request) -> web.Response:
         "url": config.url_for(ip),
         "scheme": config.scheme,
         "encrypted": config.use_tls,
+        "endpoints": config.endpoints_for(ip),
         "chunk_size": config.chunk_size,
         "max_file_size": config.max_file_size,
     })
@@ -204,20 +216,22 @@ async def handle_auth(request: web.Request) -> web.Response:
     auth: AuthManager = request.app["auth"]
     try:
         body = await request.json()
-    except (json.JSONDecodeError, Exception):
+    except (json.JSONDecodeError, ValueError):
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     pin = body.get("pin", "")
-    session_id = body.get("session_id", "")
+    session_id = body.get("session_id", "") or uuid.uuid4().hex
+    client = _client_key(request)
 
-    if not session_id:
-        session_id = uuid.uuid4().hex
+    locked_for = auth.lockout_remaining(client)
+    if locked_for > 0:
+        return web.json_response(
+            {"authenticated": False, "error": "Too many attempts", "locked_for": round(locked_for)},
+            status=429,
+        )
 
-    if auth.authenticate_session(session_id, pin):
-        return web.json_response({
-            "authenticated": True,
-            "session_id": session_id,
-        })
+    if auth.authenticate_session(session_id, pin, client):
+        return web.json_response({"authenticated": True, "session_id": session_id})
     return web.json_response({"authenticated": False, "error": "Invalid PIN"}, status=401)
 
 
@@ -225,14 +239,30 @@ async def handle_qr(request: web.Request) -> web.Response:
     """Return QR code as base64-encoded PNG."""
     auth: AuthManager = request.app["auth"]
     config: Config = request.app["config"]
-    ip = get_local_ip()
-    base_url = config.url_for(ip)
+    base_url = config.url_for(get_local_ip())
     return web.json_response({
         "qr": auth.generate_qr_base64(base_url),
         "url": base_url,
         "pairing_url": auth.pairing_url(base_url),
         "pin": auth.pin,
     })
+
+
+async def handle_ca_certificate(request: web.Request) -> web.StreamResponse:
+    """Serve the local authority certificate for installation on a phone.
+
+    iOS only offers to install a certificate when it arrives in DER form
+    under the x509 CA content type; handed PEM text it downloads a file
+    nobody can act on.
+    """
+    certificates: CertificatePaths | None = request.app["certificates"]
+    if certificates is None:
+        return web.json_response({"error": "Server is running without TLS"}, status=404)
+    return web.Response(
+        body=certificate_der(certificates.ca_cert),
+        content_type="application/x-x509-ca-cert",
+        headers={"Content-Disposition": 'attachment; filename="airbridge-ca.crt"'},
+    )
 
 
 async def handle_files(request: web.Request) -> web.Response:
@@ -248,29 +278,29 @@ async def handle_download_file(request: web.Request) -> web.StreamResponse:
     if not _check_auth(request):
         return web.json_response({"error": "Not authenticated"}, status=401)
 
-    filename = request.match_info["filename"]
     config: Config = request.app["config"]
-    # Sanitize: only allow filename, no path traversal
-    safe_name = Path(filename).name
+    # Sanitize: only allow a bare filename, no path traversal
+    safe_name = Path(request.match_info["filename"]).name
     file_path = config.downloads_dir / safe_name
 
     if not file_path.is_file():
         return web.json_response({"error": "File not found"}, status=404)
 
-    content_type = _guess_content_type(file_path)
     return web.FileResponse(
         file_path,
-        headers={"Content-Type": content_type},
+        headers={"Content-Type": _guess_content_type(file_path)},
     )
 
 
 async def handle_transfers(request: web.Request) -> web.Response:
-    """Return status of all active transfers."""
+    """Return status of all active transfers, and anything left half-sent."""
     if not _check_auth(request):
         return web.json_response({"error": "Not authenticated"}, status=401)
     tm: TransferManager = request.app["transfer_manager"]
-    transfers = {tid: info.to_dict() for tid, info in tm.active_transfers.items()}
-    return web.json_response({"transfers": transfers})
+    return web.json_response({
+        "transfers": {tid: info.to_dict() for tid, info in tm.active_transfers.items()},
+        "partial": tm.list_partial_files(),
+    })
 
 
 # --- WebSocket Handler ---
@@ -289,10 +319,10 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
 
       Server -> Client:
         {"type": "auth_result", "authenticated": true/false, "session_id": "..."}
-        {"type": "upload_ready", "transfer_id": "...", "total_chunks": N}
-        {"type": "chunk_ack", "transfer_id": "...", "received": N, "progress": 50.0, ...}
+        {"type": "upload_ready", "transfer_id": "...", "resume_from": N, ...}
+        {"type": "chunk_ack", "transfer_id": "...", "progress": 50.0, ...}
         {"type": "upload_complete", "transfer_id": "...", "checksum": "..."}
-        {"type": "download_start", "transfer_id": "...", "filename": "...", "size": N, ...}
+        {"type": "download_start", "transfer_id": "...", "filename": "...", ...}
         {"type": "download_chunk", "transfer_id": "..."}  (followed by binary frame)
         {"type": "download_complete", "transfer_id": "...", "checksum": "..."}
         {"type": "error", "message": "..."}
@@ -303,6 +333,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     auth: AuthManager = request.app["auth"]
     tm: TransferManager = request.app["transfer_manager"]
     config: Config = request.app["config"]
+    client = _client_key(request)
 
     session_id: str = ""
     authenticated = False
@@ -322,9 +353,19 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                 msg_type = data.get("type", "")
 
                 if msg_type == "auth":
-                    session_id = data.get("session_id", uuid.uuid4().hex)
-                    pin = data.get("pin", "")
-                    authenticated = auth.authenticate_session(session_id, pin)
+                    session_id = data.get("session_id") or uuid.uuid4().hex
+                    locked_for = auth.lockout_remaining(client)
+                    if locked_for > 0:
+                        await ws.send_json({
+                            "type": "auth_result",
+                            "authenticated": False,
+                            "session_id": session_id,
+                            "locked_for": round(locked_for),
+                        })
+                        continue
+                    authenticated = auth.authenticate_session(
+                        session_id, data.get("pin", ""), client
+                    )
                     await ws.send_json({
                         "type": "auth_result",
                         "authenticated": authenticated,
@@ -338,10 +379,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                     })
 
                 elif msg_type == "upload_start":
-                    filename = data.get("filename", "unnamed")
                     file_size = data.get("size", 0)
-                    mime_type = data.get("mime_type", "application/octet-stream")
-
                     if file_size > config.max_file_size:
                         await ws.send_json({
                             "type": "error",
@@ -349,24 +387,27 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                         })
                         continue
 
-                    info = tm.create_upload(filename, file_size, mime_type)
+                    info = tm.create_upload(
+                        data.get("filename", "unnamed"),
+                        file_size,
+                        data.get("mime_type", "application/octet-stream"),
+                    )
                     current_transfer = info.transfer_id
                     await ws.send_json({
                         "type": "upload_ready",
                         "transfer_id": info.transfer_id,
                         "total_chunks": info.total_chunks,
                         "chunk_size": config.chunk_size,
+                        "resume_from": info.resume_from,
                     })
 
                 elif msg_type == "upload_chunk":
-                    transfer_id = data.get("transfer_id", current_transfer or "")
-                    current_transfer = transfer_id
-                    # The binary data follows in the next message
-                    # Client sends: JSON text -> binary data
+                    # The bytes arrive in the binary frame that follows.
+                    current_transfer = data.get("transfer_id", current_transfer or "")
 
                 elif msg_type == "upload_cancel":
                     transfer_id = data.get("transfer_id", current_transfer or "")
-                    tm.cancel_transfer(transfer_id)
+                    tm.abandon_transfer(transfer_id)
                     current_transfer = None
                     await ws.send_json({
                         "type": "upload_cancelled",
@@ -374,48 +415,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                     })
 
                 elif msg_type == "download_request":
-                    filename = data.get("filename", "")
-                    safe_name = Path(filename).name
-                    file_path = config.downloads_dir / safe_name
-
-                    if not file_path.is_file():
-                        await ws.send_json({
-                            "type": "error",
-                            "message": f"File not found: {safe_name}",
-                        })
-                        continue
-
-                    info = tm.create_download(file_path)
-                    await ws.send_json({
-                        "type": "download_start",
-                        **info.to_dict(),
-                    })
-
-                    # Stream chunks
-                    file_hash = ""
-                    with open(file_path, "rb") as f:
-                        hasher = hashlib.sha256()
-                        chunk_idx = 0
-                        while True:
-                            chunk = f.read(config.chunk_size)
-                            if not chunk:
-                                break
-                            hasher.update(chunk)
-                            await ws.send_json({
-                                "type": "download_chunk",
-                                "transfer_id": info.transfer_id,
-                                "chunk_index": chunk_idx,
-                            })
-                            await ws.send_bytes(chunk)
-                            chunk_idx += 1
-                        file_hash = hasher.hexdigest()
-
-                    info.state = TransferState.COMPLETED
-                    await ws.send_json({
-                        "type": "download_complete",
-                        "transfer_id": info.transfer_id,
-                        "checksum": file_hash,
-                    })
+                    await _stream_download(ws, tm, config, data.get("filename", ""))
 
                 elif msg_type == "ping":
                     await ws.send_json({"type": "pong"})
@@ -427,12 +427,8 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                     })
 
             elif msg.type == WSMsgType.BINARY:
-                # Binary frame = file chunk data
                 if not authenticated:
-                    await ws.send_json({
-                        "type": "error",
-                        "message": "Not authenticated",
-                    })
+                    await ws.send_json({"type": "error", "message": "Not authenticated"})
                     continue
 
                 if not current_transfer:
@@ -444,20 +440,13 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
 
                 try:
                     info = tm.write_chunk(current_transfer, msg.data)
-                    response: dict[str, Any] = {
-                        "type": "chunk_ack",
-                        **info.to_dict(),
-                    }
+                    response: dict[str, Any] = {"type": "chunk_ack", **info.to_dict()}
                     if info.state == TransferState.COMPLETED:
                         response["type"] = "upload_complete"
                         current_transfer = None
-
                     await ws.send_json(response)
-                except (KeyError, RuntimeError) as e:
-                    await ws.send_json({
-                        "type": "error",
-                        "message": str(e),
-                    })
+                except (KeyError, RuntimeError) as exc:
+                    await ws.send_json({"type": "error", "message": str(exc)})
 
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
@@ -466,13 +455,14 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
         logger.exception("WebSocket error")
     finally:
         if current_transfer:
-            transfer_info = tm.get_transfer(current_transfer)
-            if transfer_info and transfer_info.state == TransferState.IN_PROGRESS:
-                # Don't cancel — allow resume
+            pending = tm.get_transfer(current_transfer)
+            if pending is not None and pending.state == TransferState.IN_PROGRESS:
+                # Keep the partial file: reconnecting resumes from it.
+                tm.cancel_transfer(current_transfer)
                 logger.info(
-                    "Connection lost during transfer %s (%.1f%% complete)",
+                    "Connection lost during transfer %s (%.1f%% kept for resume)",
                     current_transfer[:8],
-                    transfer_info.progress,
+                    pending.progress,
                 )
         if session_id:
             auth.revoke_session(session_id)
@@ -481,34 +471,90 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+async def _stream_download(
+    ws: web.WebSocketResponse,
+    tm: TransferManager,
+    config: Config,
+    filename: str,
+) -> None:
+    """Send a file from the downloads directory to the client, chunk by chunk."""
+    safe_name = Path(filename).name
+    file_path = config.downloads_dir / safe_name
+
+    if not file_path.is_file():
+        await ws.send_json({"type": "error", "message": f"File not found: {safe_name}"})
+        return
+
+    info = tm.create_download(file_path)
+    await ws.send_json({"type": "download_start", **info.to_dict()})
+
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as handle:
+        chunk_index = 0
+        while True:
+            chunk = handle.read(config.chunk_size)
+            if not chunk:
+                break
+            hasher.update(chunk)
+            await ws.send_json({
+                "type": "download_chunk",
+                "transfer_id": info.transfer_id,
+                "chunk_index": chunk_index,
+            })
+            await ws.send_bytes(chunk)
+            chunk_index += 1
+
+    info.state = TransferState.COMPLETED
+    info.checksum = hasher.hexdigest()
+    await ws.send_json({
+        "type": "download_complete",
+        "transfer_id": info.transfer_id,
+        "checksum": info.checksum,
+    })
+
+
+def _client_key(request: web.Request) -> str:
+    """Identify the caller for throttling purposes."""
+    return request.remote or "unknown"
+
+
 def _check_auth(request: web.Request) -> bool:
     """Check if request has a valid authenticated session."""
     auth: AuthManager = request.app["auth"]
-    session_id = request.headers.get("X-Session-ID", "")
-    if not session_id:
-        session_id = request.query.get("session_id", "")
+    session_id = request.headers.get("X-Session-ID") or request.query.get("session_id") or ""
     return auth.is_authenticated(session_id)
 
 
+# --- Startup ---
+
+
 async def run_server(config: Config) -> None:
-    """Start the AirBridge server."""
+    """Start the AirBridge server on every address it is configured for."""
     app = create_app(config)
     ip = get_local_ip()
 
-    ssl_context = None
-    fingerprint = ""
+    ssl_context: ssl.SSLContext | None = None
+    certificates: CertificatePaths | None = None
     if config.use_tls:
-        cert_path, key_path = ensure_certificate(config.cert_dir, ip)
-        ssl_context = build_ssl_context(cert_path, key_path)
-        fingerprint = certificate_fingerprint(cert_path)
+        certificates = ensure_certificates(config.cert_dir, ip)
+        ssl_context = build_ssl_context(certificates)
+        app["certificates"] = certificates
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, config.host, config.port, ssl_context=ssl_context)
-    await site.start()
 
-    auth_mgr: AuthManager = app["auth"]
-    _print_banner(config, auth_mgr, ip, fingerprint)
+    sites = [web.TCPSite(runner, config.host, config.port, ssl_context=ssl_context)]
+    if config.use_tls and config.http_fallback:
+        # Safari refuses to open a WebSocket to a certificate it does not
+        # trust, even after the user has waved the page's warning through.
+        # A plain endpoint alongside the encrypted one means that phone
+        # still has a way to transfer rather than a dead screen.
+        sites.append(web.TCPSite(runner, config.host, config.fallback_port))
+
+    for site in sites:
+        await site.start()
+
+    _print_banner(config, app["auth"], ip, certificates)
 
     try:
         await asyncio.Event().wait()
@@ -518,10 +564,15 @@ async def run_server(config: Config) -> None:
         await runner.cleanup()
 
 
-def _print_banner(config: Config, auth_mgr: AuthManager, ip: str, fingerprint: str) -> None:
+def _print_banner(
+    config: Config,
+    auth_mgr: AuthManager,
+    ip: str,
+    certificates: CertificatePaths | None,
+) -> None:
     """Print connection details, including a QR code the phone camera can read."""
     url = config.url_for(ip)
-    rule = "=" * 60
+    rule = "=" * 64
 
     lines = [
         "",
@@ -529,24 +580,34 @@ def _print_banner(config: Config, auth_mgr: AuthManager, ip: str, fingerprint: s
         "  AirBridge - Wireless File Transfer",
         rule,
         "",
-        f"  Server running at:  {url}",
+        f"  Open on the phone:  {url}",
         f"  Connection PIN:     {auth_mgr.pin}",
         f"  Downloads folder:   {config.downloads_dir}",
         "",
     ]
     lines += _qr_section(auth_mgr, url)
 
-    if config.use_tls:
+    if certificates is not None:
         lines += [
-            "  The certificate is self-signed, so the phone warns once:",
-            '    tap "Show Details" -> "visit this website" to continue.',
-            f"  Certificate SHA-256: {fingerprint}",
+            "  First time on this phone, to avoid warnings and make sure",
+            "  transfers can be encrypted, install the AirBridge",
+            f"  certificate from  {config.url_for(ip)}/ca.crt",
+            "    iOS: Settings > Profile Downloaded > Install, then",
+            "         Settings > General > About > Certificate Trust Settings",
+            f"  Authority SHA-256: {certificate_fingerprint(certificates.ca_cert)}",
             "",
         ]
+        if config.http_fallback:
+            lines += [
+                "  If the phone will not connect over HTTPS, this address",
+                "  always works, without encryption:",
+                f"    {config.fallback_url_for(ip)}",
+                "",
+            ]
     else:
         lines += [
             "  TLS is off (--no-tls): traffic is readable by anyone on",
-            "  this network, and the browser blocks offline caching.",
+            "  this network, and the browser disables offline caching.",
             "",
         ]
 
@@ -566,11 +627,9 @@ def _qr_section(auth_mgr: AuthManager, url: str) -> list[str]:
     code = auth_mgr.generate_qr_ascii(url).rstrip()
     if _console_can_render(code):
         return [
-            "  Point your phone camera at this code:",
+            "  Point the phone camera at this code:",
             "",
             code,
-            "",
-            "  Or open the address by hand and enter the PIN.",
             "",
         ]
     return [
@@ -594,10 +653,15 @@ def _console_can_render(text: str) -> bool:
 
 
 def _write_lines(lines: list[str]) -> None:
-    """Write banner lines, dropping anything the console cannot encode."""
+    """Write banner lines, replacing anything the console cannot encode."""
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
     for line in lines:
         try:
             print(line)
         except UnicodeEncodeError:
             print(line.encode(encoding, errors="replace").decode(encoding))
+    # Redirected output is block-buffered, and the server then runs
+    # forever without filling the buffer: without this the address and
+    # PIN never appear for anyone launching through a wrapper script.
+    with contextlib.suppress(ValueError, OSError):
+        sys.stdout.flush()

@@ -1,2 +1,2 @@
 # Vendor libraries — treat as binary for diffs
-webapp/js/vendor/*.mjs binary linguist-vendored
+airbridge/webapp/js/vendor/*.mjs binary linguist-vendored

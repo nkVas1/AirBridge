@@ -48,6 +48,15 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["airbridge*"]
 
+[tool.setuptools.package-data]
+airbridge = [
+    "webapp/*",
+    "webapp/css/*",
+    "webapp/js/*",
+    "webapp/js/vendor/*",
+    "webapp/icons/*",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
