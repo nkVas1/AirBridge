@@ -44,3 +44,10 @@ htmlcov/
 # Temporary files
 tmp/
 temp/
+
+# AirBridge runtime state
+.airbridge/
+*.pem
+
+# Working notes — not product documentation
+dev-notes/
