@@ -27,6 +27,7 @@ class Config:
     downloads_dir: Path = field(default_factory=lambda: _resolve_downloads_dir())
     cert_dir: Path = field(default_factory=lambda: _resolve_cert_dir())
     use_tls: bool = True
+    http_fallback: bool = True
     service_name: str = "AirBridge"
     mdns_type: str = "_airbridge._tcp.local."
     pin_length: int = 6
@@ -37,9 +38,25 @@ class Config:
         """URL scheme the server is reachable on."""
         return "https" if self.use_tls else "http"
 
+    @property
+    def fallback_port(self) -> int:
+        """Port of the unencrypted listener that sits beside the main one."""
+        return self.port + 1
+
     def url_for(self, host: str) -> str:
         """Build the address a client should open for this server."""
         return f"{self.scheme}://{host}:{self.port}"
+
+    def fallback_url_for(self, host: str) -> str:
+        """Build the plain-HTTP address, for clients that cannot do TLS."""
+        return f"http://{host}:{self.fallback_port}"
+
+    def endpoints_for(self, host: str) -> dict[str, str]:
+        """Every address this server answers on, keyed by scheme."""
+        endpoints = {self.scheme: self.url_for(host)}
+        if self.use_tls and self.http_fallback:
+            endpoints["http"] = self.fallback_url_for(host)
+        return endpoints
 
     def __post_init__(self) -> None:
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
@@ -73,5 +90,6 @@ def load_config() -> Config:
         chunk_size=int(os.environ.get("AIRBRIDGE_CHUNK_SIZE", str(_DEFAULT_CHUNK_SIZE))),
         max_file_size=int(os.environ.get("AIRBRIDGE_MAX_FILE_SIZE", str(_DEFAULT_MAX_FILE_SIZE))),
         use_tls=_env_flag("AIRBRIDGE_TLS", True),
+        http_fallback=_env_flag("AIRBRIDGE_HTTP_FALLBACK", True),
         log_level=os.environ.get("AIRBRIDGE_LOG_LEVEL", "INFO"),
     )

@@ -57,6 +57,14 @@ class TestInfoEndpoint:
         assert data["scheme"] == "http"
         assert data["encrypted"] is False
         assert data["url"].startswith("http://")
+        assert list(data["endpoints"]) == ["http"]
+
+
+class TestCertificateEndpoint:
+    async def test_absent_without_tls(self, client: TestClient) -> None:
+        # Nothing to install when the server is not serving TLS at all.
+        resp = await client.get("/ca.crt")
+        assert resp.status == 404
 
 
 class TestAuthEndpoint:

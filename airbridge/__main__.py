@@ -58,6 +58,14 @@ def main() -> None:
             "the network and the browser disables offline caching"
         ),
     )
+    parser.add_argument(
+        "--no-http-fallback",
+        action="store_true",
+        help=(
+            "Do not open the plain-HTTP port beside the encrypted one. "
+            "Phones that refuse the certificate then have no way in"
+        ),
+    )
     args = parser.parse_args()
 
     # Environment supplies the defaults; command-line arguments win over them.
@@ -74,6 +82,8 @@ def main() -> None:
         overrides["log_level"] = args.log_level
     if args.no_tls:
         overrides["use_tls"] = False
+    if args.no_http_fallback:
+        overrides["http_fallback"] = False
 
     if overrides:
         config = replace(config, **overrides)
