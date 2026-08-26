@@ -173,6 +173,10 @@ body {
 
 #pin-input {
     flex: 1;
+    /* Without this the field's min-content width (24px glyphs plus 8px
+       letter-spacing) keeps the row from shrinking, and the Connect
+       button lands off-screen on a phone. */
+    min-width: 0;
     background: var(--bg-primary);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
