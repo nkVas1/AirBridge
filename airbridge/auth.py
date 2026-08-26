@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import logging
 import secrets
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 import qrcode
 from qrcode.image.pil import PilImage
@@ -86,45 +86,58 @@ class AuthManager:
         """Revoke authentication for a session."""
         self._authenticated_sessions.discard(session_id)
 
-    def generate_qr_data(self, host: str, port: int) -> str:
-        """Generate connection data for QR code encoding.
+    def pairing_url(self, base_url: str) -> str:
+        """Build the address that pairs a device in one step.
+
+        The PIN travels as a query parameter so that scanning the code
+        with the stock iPhone camera opens the web app already
+        authenticated. A QR code holding JSON — the previous format —
+        is not a link, so the camera offers nothing to tap.
 
         Args:
-            host: Server IP address or hostname.
-            port: Server port number.
+            base_url: Server root, for example `https://192.168.1.5:8090`.
 
         Returns:
-            JSON string with connection parameters.
+            A URL carrying the current PIN.
         """
-        return json.dumps(
-            {
-                "url": f"http://{host}:{port}",
-                "pin": self._pin,
-                "service": "AirBridge",
-            },
-            separators=(",", ":"),
-        )
+        return f"{base_url.rstrip('/')}/?pin={quote(self._pin)}"
 
-    def generate_qr_base64(self, host: str, port: int) -> str:
-        """Generate QR code as base64-encoded PNG image.
+    def generate_qr_base64(self, base_url: str) -> str:
+        """Render the pairing URL as a base64-encoded PNG.
 
         Args:
-            host: Server IP address or hostname.
-            port: Server port number.
+            base_url: Server root, for example `https://192.168.1.5:8090`.
 
         Returns:
             Base64-encoded PNG string for embedding in HTML.
         """
-        data = self.generate_qr_data(host, port)
+        qr = self._build_qr(base_url)
+        img: PilImage = qr.make_image(fill_color="black", back_color="white")  # type: ignore[assignment]
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    def generate_qr_ascii(self, base_url: str) -> str:
+        """Render the pairing URL as text, for printing in the terminal.
+
+        Args:
+            base_url: Server root, for example `https://192.168.1.5:8090`.
+
+        Returns:
+            The QR code drawn with block characters.
+        """
+        buffer = io.StringIO()
+        self._build_qr(base_url).print_ascii(out=buffer, invert=True)
+        return buffer.getvalue()
+
+    def _build_qr(self, base_url: str) -> qrcode.QRCode:
+        """Encode the pairing URL into a QR code object."""
         qr = qrcode.QRCode(
             version=None,
             error_correction=qrcode.constants.ERROR_CORRECT_M,
             box_size=8,
             border=4,
         )
-        qr.add_data(data)
+        qr.add_data(self.pairing_url(base_url))
         qr.make(fit=True)
-        img: PilImage = qr.make_image(fill_color="black", back_color="white")  # type: ignore[assignment]
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("ascii")
+        return qr

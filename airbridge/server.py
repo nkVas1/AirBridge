@@ -9,20 +9,23 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import mimetypes
-import secrets
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from airbridge import __version__
 from airbridge.auth import AuthManager
 from airbridge.config import Config
-from airbridge.crypto import compute_checksum
 from airbridge.discovery import ServiceDiscovery, get_local_ip
+from airbridge.tls import build_ssl_context, certificate_fingerprint, ensure_certificate
 from airbridge.transfer import TransferManager, TransferState
 
 logger = logging.getLogger(__name__)
@@ -80,6 +83,7 @@ def create_app(config: Config) -> web.Application:
         service_name=config.service_name,
         service_type=config.mdns_type,
         port=config.port,
+        scheme=config.scheme,
     )
 
     # Register routes
@@ -100,6 +104,11 @@ def create_app(config: Config) -> web.Application:
             sub_path = WEBAPP_DIR / sub
             if sub_path.exists():
                 app.router.add_get(f"/{sub}", _make_file_handler(sub_path))
+        # Browsers request /favicon.ico unprompted; answer it rather than
+        # logging a 404 on every page load.
+        icon_path = WEBAPP_DIR / "icons" / "icon-192.png"
+        if icon_path.exists():
+            app.router.add_get("/favicon.ico", _make_file_handler(icon_path))
 
     # Lifecycle hooks
     app.on_startup.append(on_startup)
@@ -144,7 +153,7 @@ async def on_startup(app: web.Application) -> None:
     discovery: ServiceDiscovery = app["discovery"]
     try:
         ip = discovery.register()
-        logger.info("AirBridge available at http://%s:%d", ip, app["config"].port)
+        logger.info("AirBridge available at %s", app["config"].url_for(ip))
     except Exception:
         logger.warning("mDNS registration failed — manual IP entry required", exc_info=True)
 
@@ -162,7 +171,7 @@ async def on_shutdown(app: web.Application) -> None:
 # --- HTTP Handlers ---
 
 
-async def handle_index(request: web.Request) -> web.Response:
+async def handle_index(request: web.Request) -> web.StreamResponse:
     """Serve the main PWA page."""
     index_path = WEBAPP_DIR / "index.html"
     if index_path.is_file():
@@ -179,10 +188,12 @@ async def handle_info(request: web.Request) -> web.Response:
     ip = get_local_ip()
     return web.json_response({
         "service": config.service_name,
-        "version": "1.0.0",
+        "version": __version__,
         "ip": ip,
         "port": config.port,
-        "url": f"http://{ip}:{config.port}",
+        "url": config.url_for(ip),
+        "scheme": config.scheme,
+        "encrypted": config.use_tls,
         "chunk_size": config.chunk_size,
         "max_file_size": config.max_file_size,
     })
@@ -215,10 +226,11 @@ async def handle_qr(request: web.Request) -> web.Response:
     auth: AuthManager = request.app["auth"]
     config: Config = request.app["config"]
     ip = get_local_ip()
-    qr_b64 = auth.generate_qr_base64(ip, config.port)
+    base_url = config.url_for(ip)
     return web.json_response({
-        "qr": qr_b64,
-        "url": f"http://{ip}:{config.port}",
+        "qr": auth.generate_qr_base64(base_url),
+        "url": base_url,
+        "pairing_url": auth.pairing_url(base_url),
         "pin": auth.pin,
     })
 
@@ -231,7 +243,7 @@ async def handle_files(request: web.Request) -> web.Response:
     return web.json_response({"files": tm.list_received_files()})
 
 
-async def handle_download_file(request: web.Request) -> web.Response:
+async def handle_download_file(request: web.Request) -> web.StreamResponse:
     """Download a specific file from the server."""
     if not _check_auth(request):
         return web.json_response({"error": "Not authenticated"}, status=401)
@@ -382,9 +394,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                     # Stream chunks
                     file_hash = ""
                     with open(file_path, "rb") as f:
-                        import hashlib as _hashlib
-
-                        hasher = _hashlib.sha256()
+                        hasher = hashlib.sha256()
                         chunk_idx = 0
                         while True:
                             chunk = f.read(config.chunk_size)
@@ -483,38 +493,111 @@ def _check_auth(request: web.Request) -> bool:
 async def run_server(config: Config) -> None:
     """Start the AirBridge server."""
     app = create_app(config)
+    ip = get_local_ip()
+
+    ssl_context = None
+    fingerprint = ""
+    if config.use_tls:
+        cert_path, key_path = ensure_certificate(config.cert_dir, ip)
+        ssl_context = build_ssl_context(cert_path, key_path)
+        fingerprint = certificate_fingerprint(cert_path)
+
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, config.host, config.port)
+    site = web.TCPSite(runner, config.host, config.port, ssl_context=ssl_context)
     await site.start()
 
-    ip = get_local_ip()
     auth_mgr: AuthManager = app["auth"]
+    _print_banner(config, auth_mgr, ip, fingerprint)
 
-    print()
-    print("=" * 60)
-    print("  ✈  AirBridge — Wireless File Transfer")
-    print("=" * 60)
-    print()
-    print(f"  Server running at:  http://{ip}:{config.port}")
-    print(f"  Connection PIN:     {auth_mgr.pin}")
-    print(f"  Downloads folder:   {config.downloads_dir}")
-    print()
-    print("  On your iPhone:")
-    print(f"    1. Connect to the same Wi-Fi network")
-    print(f"    2. Open Safari and go to http://{ip}:{config.port}")
-    print(f"    3. Enter PIN: {auth_mgr.pin}")
-    print()
-    print("  Or use Personal Hotspot for offline transfer!")
-    print("=" * 60)
-    print()
-
-    # Keep running until interrupted
     try:
-        import asyncio
-
         await asyncio.Event().wait()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
         await runner.cleanup()
+
+
+def _print_banner(config: Config, auth_mgr: AuthManager, ip: str, fingerprint: str) -> None:
+    """Print connection details, including a QR code the phone camera can read."""
+    url = config.url_for(ip)
+    rule = "=" * 60
+
+    lines = [
+        "",
+        rule,
+        "  AirBridge - Wireless File Transfer",
+        rule,
+        "",
+        f"  Server running at:  {url}",
+        f"  Connection PIN:     {auth_mgr.pin}",
+        f"  Downloads folder:   {config.downloads_dir}",
+        "",
+    ]
+    lines += _qr_section(auth_mgr, url)
+
+    if config.use_tls:
+        lines += [
+            "  The certificate is self-signed, so the phone warns once:",
+            '    tap "Show Details" -> "visit this website" to continue.',
+            f"  Certificate SHA-256: {fingerprint}",
+            "",
+        ]
+    else:
+        lines += [
+            "  TLS is off (--no-tls): traffic is readable by anyone on",
+            "  this network, and the browser blocks offline caching.",
+            "",
+        ]
+
+    lines += [rule, ""]
+    _write_lines(lines)
+
+
+def _qr_section(auth_mgr: AuthManager, url: str) -> list[str]:
+    """Build the QR block, or an explanation of why it was left out.
+
+    A Windows console on a legacy code page cannot draw the block
+    characters the code is made of. Printing them anyway used to raise
+    UnicodeEncodeError and kill the server before it was ever usable;
+    printing replacement marks instead would produce an unreadable
+    square. Naming the address is more useful than either.
+    """
+    code = auth_mgr.generate_qr_ascii(url).rstrip()
+    if _console_can_render(code):
+        return [
+            "  Point your phone camera at this code:",
+            "",
+            code,
+            "",
+            "  Or open the address by hand and enter the PIN.",
+            "",
+        ]
+    return [
+        "  Open the address above on the phone and enter the PIN.",
+        "  (This console cannot draw the pairing QR code. `chcp 65001`",
+        "   switches it to UTF-8, or open /api/qr in a browser.)",
+        "",
+    ]
+
+
+def _console_can_render(text: str) -> bool:
+    """Report whether stdout's encoding covers every character in `text`."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return False
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+def _write_lines(lines: list[str]) -> None:
+    """Write banner lines, dropping anything the console cannot encode."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    for line in lines:
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            print(line.encode(encoding, errors="replace").decode(encoding))

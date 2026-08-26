@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
-from aiohttp.test_utils import AioHTTPTestCase, TestClient
+from aiohttp.test_utils import TestClient
 
+from airbridge import __version__
 from airbridge.config import Config
 from airbridge.server import create_app
 
@@ -18,6 +17,8 @@ def config(tmp_path):
         host="127.0.0.1",
         port=0,  # Let OS pick port
         downloads_dir=tmp_path / "downloads",
+        cert_dir=tmp_path / "certs",
+        use_tls=False,
         chunk_size=1024,
     )
 
@@ -44,9 +45,18 @@ class TestInfoEndpoint:
         assert resp.status == 200
         data = await resp.json()
         assert data["service"] == "AirBridge"
-        assert data["version"] == "1.0.0"
+        assert data["version"] == __version__
         assert "ip" in data
         assert "port" in data
+
+    async def test_reports_transport_security(self, client: TestClient) -> None:
+        resp = await client.get("/api/info")
+        data = await resp.json()
+        # The fixture disables TLS, so the server must say so rather than
+        # advertising an encrypted URL it is not actually serving.
+        assert data["scheme"] == "http"
+        assert data["encrypted"] is False
+        assert data["url"].startswith("http://")
 
 
 class TestAuthEndpoint:
@@ -88,6 +98,10 @@ class TestQREndpoint:
         assert "url" in data
         assert "pin" in data
         assert len(data["qr"]) > 0
+        # The code must encode a link the phone camera can open, with the
+        # PIN already in it — a bare JSON blob gives the camera nothing to tap.
+        assert data["pairing_url"].startswith(data["url"])
+        assert data["pairing_url"].endswith(f"pin={data['pin']}")
 
 
 class TestFilesEndpoint:

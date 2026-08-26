@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import time
@@ -12,6 +13,13 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _chunk_count(file_size: int, chunk_size: int) -> int:
+    """Number of chunks a file of this size is split into (empty files still take one)."""
+    if file_size <= 0:
+        return 1
+    return (file_size + chunk_size - 1) // chunk_size
 
 
 class TransferState(str, Enum):
@@ -129,7 +137,7 @@ class TransferManager:
         Returns:
             TransferInfo with allocated transfer_id.
         """
-        total_chunks = (file_size + self._chunk_size - 1) // self._chunk_size if file_size > 0 else 1
+        total_chunks = _chunk_count(file_size, self._chunk_size)
 
         # Sanitize filename to prevent path traversal
         safe_name = Path(filename).name
@@ -192,6 +200,8 @@ class TransferManager:
 
         # Open file handle on first write
         if transfer_id not in self._file_handles:
+            if info.save_path is None:
+                raise RuntimeError(f"Transfer {transfer_id} has no destination path")
             self._file_handles[transfer_id] = open(info.save_path, "wb")  # noqa: SIM115
 
         self._file_handles[transfer_id].write(chunk_data)
@@ -220,7 +230,7 @@ class TransferManager:
             raise FileNotFoundError(f"File not found: {file_path}")
 
         file_size = file_path.stat().st_size
-        total_chunks = (file_size + self._chunk_size - 1) // self._chunk_size if file_size > 0 else 1
+        total_chunks = _chunk_count(file_size, self._chunk_size)
 
         info = TransferInfo(
             filename=file_path.name,
@@ -253,7 +263,7 @@ class TransferManager:
         if transfer_id not in self._file_handles:
             self._file_handles[transfer_id] = open(info.save_path, "rb")  # noqa: SIM115
 
-        data = self._file_handles[transfer_id].read(self._chunk_size)
+        data: bytes = self._file_handles[transfer_id].read(self._chunk_size)
         if not data:
             info.state = TransferState.COMPLETED
             info.completed_at = time.time()
@@ -336,7 +346,5 @@ class TransferManager:
         """Close and remove file handle for a transfer."""
         handle = self._file_handles.pop(transfer_id, None)
         if handle is not None:
-            try:
+            with contextlib.suppress(OSError):
                 handle.close()
-            except OSError:
-                pass

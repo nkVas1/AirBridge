@@ -24,10 +24,12 @@ class EncryptedPayload:
         return self.nonce + self.ciphertext
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "EncryptedPayload":
+    def from_bytes(cls, data: bytes) -> EncryptedPayload:
         """Deserialize from bytes."""
         if len(data) < _NONCE_SIZE:
-            raise ValueError(f"Data too short: expected at least {_NONCE_SIZE} bytes, got {len(data)}")
+            raise ValueError(
+                f"Data too short: expected at least {_NONCE_SIZE} bytes, got {len(data)}"
+            )
         return cls(nonce=data[:_NONCE_SIZE], ciphertext=data[_NONCE_SIZE:])
 
 

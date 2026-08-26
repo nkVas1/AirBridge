@@ -1096,7 +1096,44 @@ const AirBridge = (() => {
             if (e.key === "Escape" && modal && !modal.hidden) closePreviewModal();
         });
 
+        registerServiceWorker();
+        applyPairingParameters();
+
         console.log("[AirBridge] Initialized");
+    }
+
+    /**
+     * Register the offline cache worker.
+     *
+     * Service workers only exist in a secure context, so this is a no-op
+     * when the server was started with --no-tls.
+     */
+    function registerServiceWorker() {
+        if (!("serviceWorker" in navigator)) {
+            console.info("[AirBridge] Offline caching unavailable — page is not a secure context");
+            return;
+        }
+        navigator.serviceWorker.register("/sw.js").catch((err) => {
+            console.warn("[AirBridge] Service worker registration failed:", err);
+        });
+    }
+
+    /**
+     * Fill in the PIN carried by the pairing QR code and connect straight away.
+     *
+     * The PIN is stripped from the address bar afterwards so it does not
+     * linger in browser history or get shared along with the link.
+     */
+    function applyPairingParameters() {
+        const pin = new URLSearchParams(location.search).get("pin");
+        if (!pin) return;
+
+        history.replaceState(null, "", location.pathname);
+
+        const input = els.pinInput();
+        if (!input) return;
+        input.value = pin;
+        authenticate();
     }
 
     // --- Start ---

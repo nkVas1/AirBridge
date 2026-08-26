@@ -4,19 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "airbridge"
-version = "1.0.0"
-description = "Wireless file transfer between Windows PC and iPhone via local Wi-Fi — no internet required"
+version = "1.1.0"
+description = "Wireless file transfer between a Windows PC and an iPhone over the local network"
 readme = "README.md"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 authors = [
-    {name = "AirBridge Contributors"},
+    {name = "Nikita Vasiliuk", email = "nikitavasiluk495@gmail.com"},
 ]
-keywords = ["file-transfer", "wireless", "wifi", "airdrop", "cross-platform"]
+keywords = ["file-transfer", "wireless", "wifi", "airdrop", "iphone", "local-network"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -51,6 +51,7 @@ include = ["airbridge*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 target-version = "py310"
@@ -64,3 +65,7 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["qrcode.*"]
+ignore_missing_imports = true

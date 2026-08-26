@@ -2,7 +2,7 @@
  * AirBridge Service Worker — offline caching for PWA.
  */
 
-const CACHE_NAME = "airbridge-v1";
+const CACHE_NAME = "airbridge-v2";
 const STATIC_ASSETS = [
     "/",
     "/static/css/style.css",

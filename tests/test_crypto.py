@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from cryptography.exceptions import InvalidTag
 
 from airbridge.crypto import (
     EncryptedPayload,
@@ -74,7 +75,7 @@ class TestEncryptDecrypt:
         key1 = generate_key()
         key2 = generate_key()
         payload = encrypt(b"secret", key1)
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidTag):
             decrypt(payload, key2)
 
     def test_corrupted_ciphertext_fails(self) -> None:
@@ -84,7 +85,7 @@ class TestEncryptDecrypt:
             nonce=payload.nonce,
             ciphertext=payload.ciphertext[:-1] + bytes([payload.ciphertext[-1] ^ 0xFF]),
         )
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidTag):
             decrypt(corrupted, key)
 
     def test_invalid_key_size(self) -> None:

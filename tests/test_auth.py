@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import json
+import base64
+from urllib.parse import parse_qs, urlparse
 
 from airbridge.auth import AuthManager
+
+PNG_SIGNATURE = bytes.fromhex("89504e47")
 
 
 class TestAuthManager:
@@ -15,7 +18,6 @@ class TestAuthManager:
 
     def test_pin_regeneration(self) -> None:
         auth = AuthManager(pin_length=6)
-        pin1 = auth.pin
         pin2 = auth.regenerate_pin()
         # Pins are random, so they could be the same
         # but regenerate should return the new pin
@@ -69,20 +71,28 @@ class TestAuthManager:
         pin = auth.pin
         assert auth.verify_pin(f" {pin} ") is True
 
-    def test_qr_data(self) -> None:
+
+    def test_pairing_url_carries_the_pin(self) -> None:
         auth = AuthManager(pin_length=6)
-        data = auth.generate_qr_data("192.168.1.100", 8090)
-        parsed = json.loads(data)
-        assert parsed["url"] == "http://192.168.1.100:8090"
-        assert parsed["pin"] == auth.pin
-        assert parsed["service"] == "AirBridge"
+        url = auth.pairing_url("https://192.168.1.100:8090")
+        parsed = urlparse(url)
+        assert parsed.scheme == "https"
+        assert parsed.netloc == "192.168.1.100:8090"
+        assert parse_qs(parsed.query)["pin"] == [auth.pin]
+
+    def test_pairing_url_does_not_double_the_slash(self) -> None:
+        auth = AuthManager(pin_length=6)
+        assert auth.pairing_url("https://host:8090/").count("//") == 1
 
     def test_qr_base64(self) -> None:
         auth = AuthManager(pin_length=6)
-        b64 = auth.generate_qr_base64("192.168.1.100", 8090)
+        b64 = auth.generate_qr_base64("https://192.168.1.100:8090")
         assert len(b64) > 0
-        # Should be valid base64
-        import base64
-        decoded = base64.b64decode(b64)
-        # PNG signature
-        assert decoded[:4] == b"\x89PNG"
+        assert base64.b64decode(b64)[:4] == PNG_SIGNATURE
+
+    def test_qr_ascii_is_printable(self) -> None:
+        auth = AuthManager(pin_length=6)
+        ascii_qr = auth.generate_qr_ascii("https://192.168.1.100:8090")
+        assert ascii_qr.strip()
+        # More than one row, so it is a real code and not a single line.
+        assert len(ascii_qr.splitlines()) > 10

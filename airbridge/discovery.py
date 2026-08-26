@@ -8,6 +8,8 @@ from typing import Any
 
 from zeroconf import ServiceInfo, Zeroconf
 
+from airbridge import __version__
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,10 +37,17 @@ def get_local_ip() -> str:
 class ServiceDiscovery:
     """Manages mDNS/Bonjour service registration and teardown."""
 
-    def __init__(self, service_name: str, service_type: str, port: int) -> None:
+    def __init__(
+        self,
+        service_name: str,
+        service_type: str,
+        port: int,
+        scheme: str = "https",
+    ) -> None:
         self._service_name = service_name
         self._service_type = service_type
         self._port = port
+        self._scheme = scheme
         self._zeroconf: Zeroconf | None = None
         self._info: ServiceInfo | None = None
 
@@ -87,8 +96,9 @@ class ServiceDiscovery:
     def _build_properties(self, ip: str) -> dict[str, Any]:
         """Build TXT record properties for the service."""
         return {
-            "version": "1.0.0",
+            "version": __version__,
             "platform": "desktop",
+            "scheme": self._scheme,
             "ip": ip,
             "port": str(self._port),
         }

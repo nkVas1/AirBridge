@@ -6,6 +6,9 @@ import argparse
 import asyncio
 import logging
 import sys
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
 from airbridge import __version__
 from airbridge.config import load_config
@@ -47,18 +50,20 @@ def main() -> None:
         default=None,
         help="Logging level (default: INFO)",
     )
+    parser.add_argument(
+        "--no-tls",
+        action="store_true",
+        help=(
+            "Serve over plain HTTP. Transfers are then readable by anyone on "
+            "the network and the browser disables offline caching"
+        ),
+    )
     args = parser.parse_args()
 
-    # Load base config from environment, override with CLI args
+    # Environment supplies the defaults; command-line arguments win over them.
     config = load_config()
 
-    # Apply CLI overrides via environment (config is frozen dataclass)
-    import os
-    from pathlib import Path
-
-    from airbridge.config import Config
-
-    overrides: dict[str, object] = {}
+    overrides: dict[str, Any] = {}
     if args.port is not None:
         overrides["port"] = args.port
     if args.host is not None:
@@ -67,14 +72,11 @@ def main() -> None:
         overrides["downloads_dir"] = Path(args.downloads_dir)
     if args.log_level is not None:
         overrides["log_level"] = args.log_level
+    if args.no_tls:
+        overrides["use_tls"] = False
 
     if overrides:
-        # Reconstruct config with overrides
-        from dataclasses import asdict
-
-        current = asdict(config)
-        current.update(overrides)
-        config = Config(**current)
+        config = replace(config, **overrides)
 
     # Configure logging
     logging.basicConfig(
