@@ -4,6 +4,67 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-08-26
+
+Everything 1.1.0 listed as unfinished, finished — plus a fault in 1.1.0's
+own TLS work that would have broken the app on the one device this
+project exists for.
+
+### Fixed
+
+- **The web interface now ships with the package.** `webapp/` sat beside
+  the Python package rather than inside it, so an installed wheel held
+  the server and none of the interface. Only a checkout ever worked.
+- **Certificates iOS will accept.** 1.1.0's certificate had no
+  ExtendedKeyUsage extension; Apple has required `serverAuth` on every
+  TLS server certificate issued since July 2019 and rejects certificates
+  without it. It was also a bare self-signed leaf bound to one address,
+  so every change of network would have meant re-trusting it on the
+  phone. There is now a local certificate authority, trusted once, with
+  a server certificate under it that rotates freely. The authority is
+  served at `/ca.crt` in DER form, the only shape iOS treats as
+  installable.
+- **A way through when the certificate is not installed.** Safari
+  refuses a WebSocket to an untrusted certificate even after the page
+  warning is accepted, and AirBridge moves every byte over a WebSocket —
+  so 1.1.0 could have loaded on an iPhone and then transferred nothing.
+  The server now also listens on plain HTTP one port up, and the web app
+  explains the failure and offers that address rather than sitting there
+  looking broken.
+- **mDNS registration.** zeroconf's synchronous API raises
+  `EventLoopBlocked` when called from inside a running loop, which is
+  where the aiohttp startup hook lives; it failed on every start. Now
+  registered through `AsyncZeroconf`.
+- **The startup banner reaches redirected output.** `print` is
+  block-buffered when stdout is not a console, and a server that then
+  runs forever never filled the buffer, so anyone launching through a
+  wrapper script never saw the address or the PIN.
+
+### Added
+
+- **Interrupted uploads resume.** An upload lands in a scratch file
+  named for its declared size and is renamed into place only once whole;
+  reconnecting reports how many bytes survived and the sender continues
+  from there. The digest still spans the whole file.
+- **Both ends verify the checksum.** The server always reported a
+  SHA-256 digest and nothing compared it. The browser now hashes what it
+  sends and receives and checks; a download that fails the check is
+  discarded rather than handed over. Needed a streaming SHA-256 in
+  JavaScript, since `crypto.subtle` cannot hash incrementally and does
+  not exist outside a secure context.
+- **Wrong PINs are throttled.** Five failures in a minute lock that
+  address out, doubling on repeat up to an hour. Six digits is a million
+  guesses and nothing was slowing them down.
+- `--no-http-fallback`, and `AIRBRIDGE_HTTP_FALLBACK`.
+- Partial uploads are listed separately from finished ones, and never
+  offered as if they were complete files.
+
+### Removed
+
+- `crypto.py`. Its AES-GCM helpers were never called by anything —
+  transport security is TLS — and a module of unused cryptography reads
+  like a promise the product does not keep.
+
 ## [1.1.0] — 2026-08-26
 
 The 1.0.0 README promised encryption, a pairing QR code and an offline
@@ -56,6 +117,7 @@ implements them or stops claiming them.
 
 - `webapp/` is not part of the Python package, so `pip install` yields a
   server without a web interface. Run from a checkout instead.
+  *(Fixed in 1.2.0.)*
 
 ## [1.0.0] — 2026-05-23
 

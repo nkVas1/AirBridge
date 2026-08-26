@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "airbridge"
-version = "1.1.0"
+version = "1.2.0"
 description = "Wireless file transfer between a Windows PC and an iPhone over the local network"
 readme = "README.md"
 license = {file = "LICENSE"}

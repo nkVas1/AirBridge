@@ -11,7 +11,7 @@
 [![Stack](https://img.shields.io/badge/stack-Python_·_aiohttp_·_PWA-3776AB?logo=python&logoColor=white)](#how-it-works)
 [![License](https://img.shields.io/badge/license-source--available_NC-lightgrey)](LICENSE)
 
-<img src="docs/screenshots/connect.png" width="255" alt="Pairing screen with the PIN field" />&nbsp;&nbsp;<img src="docs/screenshots/send.png" width="255" alt="Send tab with a completed transfer" />&nbsp;&nbsp;<img src="docs/screenshots/received.png" width="255" alt="Files received on the PC, with thumbnails" />
+<img src="docs/screenshots/connect.png" width="255" alt="Pairing screen with the PIN field" />&nbsp;&nbsp;<img src="docs/screenshots/send.png" width="255" alt="Send tab showing a verified transfer" />&nbsp;&nbsp;<img src="docs/screenshots/received.png" width="255" alt="Files received on the PC, with thumbnails" />
 
 </div>
 
@@ -30,20 +30,27 @@ The tools that do solve it each ask for something:
 | | on the phone | needs internet | notes |
 |---|---|---|---|
 | **AirDrop** | built in | no | Apple devices only — no Windows |
-| **[LocalSend](https://github.com/localsend/localsend)** | install an app | no | both ends need the app installed |
-| **[PairDrop](https://github.com/schlagmichdoch/PairDrop)** / Snapdrop | browser only | **yes** | a signalling server has to introduce the peers |
+| **[LocalSend](https://github.com/localsend/localsend)** | install an app | no | both ends need the app; the better choice if you don't mind installing one |
+| **[PairDrop](https://github.com/schlagmichdoch/PairDrop)** | browser only | **yes**¹ | a signalling server has to introduce the peers |
+| **[qrcp](https://github.com/claudiodangelis/qrcp)** | browser only | no | one-shot terminal transfer; no session, no progress, bring your own certificate |
+| **Windows Phone Link** | built in | yes | iPhone → PC only, and file types depend on the sending app |
 | **Cloud drives** | install an app | **yes** | the file leaves your network |
-| **AirBridge** | **browser only** | **no** | one server, on the PC you already control |
+| **AirBridge** | **browser only** | **no** | a session that stays open, with previews, progress and resume |
 
-The gap AirBridge fills is the intersection of the last two columns:
-nothing to install on the phone, *and* nothing outside the room. You run
-a small server on the PC; the phone opens it in Safari. That is the whole
-system. It works on a hotel network, and on an iPhone Personal Hotspot
-with cellular data switched off.
+¹ *PairDrop can be self-hosted for offline use, which means running Node and
+a STUN/TURN setup of your own.*
+
+The gap AirBridge fills is narrow and real: nothing to install on the
+phone, nothing outside the room, **and** a session that behaves like an
+app rather than a single shot. You run a small server on the PC; the
+phone opens it in Safari and stays connected — sending, browsing what has
+arrived, previewing it, pulling files back. It works on a hotel network,
+and on an iPhone Personal Hotspot with cellular data switched off.
 
 **It is a personal tool, not a product.** No account, no telemetry, no
-update channel, no support commitment. If you want something maintained
-by a team, LocalSend is the better answer and is genuinely good.
+update channel, no support commitment. If installing an app on the phone
+is acceptable, LocalSend is more capable and better maintained, and this
+README would rather say so than pretend otherwise.
 
 ## How it works
 
@@ -59,8 +66,8 @@ by a team, LocalSend is the better answer and is genuinely good.
 │  │              │  │      AES-256-GCM       │  │  PWA, no     │  │
 │  │  PIN auth    │  │                        │  │  install     │  │
 │  │  SHA-256     │  │   3. 64 KB chunks,     │  └──────────────┘  │
-│  └──────┬───────┘  │      either direction  │                    │
-│         │          │                        │                    │
+│  └──────┬───────┘  │      either direction, │                    │
+│         │          │      resumable         │                    │
 │  ~/Downloads/      │   4. mDNS announce     │                    │
 │    AirBridge_...   │ ◄──────────────────────┤  airbridge.local   │
 └────────────────────┘                        └────────────────────┘
@@ -72,24 +79,52 @@ Metadata travels as JSON text frames, file bytes as binary frames on the
 same socket. The server writes each chunk straight to disk and hashes it
 as it goes, so memory use does not scale with file size.
 
+**Interrupted transfers continue.** An upload lands in a scratch file
+named for its size; reconnecting reports how much survived and the phone
+sends only the rest. **Both ends hash independently** and compare, so
+"Complete" means the right bytes arrived, not merely that bytes did.
+
 ### Why HTTPS, for a thing on your own LAN
 
 Not for the padlock. Browsers gate half their capabilities behind a
 *secure context*: on a plain `http://192.168.x.x` page, `crypto.subtle`
-is undefined and `navigator.serviceWorker` does not exist. Serving over
-TLS is what makes offline caching possible at all — and it keeps anyone
-else on the same Wi-Fi from reading the file in transit.
+is undefined and `navigator.serviceWorker` does not exist, so offline
+caching is impossible before you write a line of it. TLS also keeps
+anyone else on the same Wi-Fi from reading the file in transit.
 
-No certificate authority will vouch for `192.168.1.5`, so AirBridge signs
-its own certificate and re-issues it when the address changes. **Safari
-warns once per certificate**: tap *Show Details*, then *visit this
-website*. The terminal prints the SHA-256 fingerprint so the certificate
-can be checked against the machine that issued it.
+No certificate authority will vouch for `192.168.1.5`, so AirBridge is
+its own authority: a CA generated on first run, and a server certificate
+under it re-issued whenever your address changes. Certificates are built
+to [Apple's published requirements](https://support.apple.com/103769) —
+`serverAuth` in ExtendedKeyUsage, a DNS name in the SAN, under 398 days —
+because iOS rejects certificates that miss any of them outright.
 
-`--no-tls` serves plain HTTP instead. Transfers are then readable by
-anyone on the network, and offline caching stays off.
+**Install the certificate once** and the warnings stop for good. Open
+`https://<address>/ca.crt` on the phone, then *Settings → Profile
+Downloaded → Install*, then *Settings → General → About → Certificate
+Trust Settings* and switch AirBridge on. The terminal prints the SHA-256
+fingerprint so you can check it is your machine and not someone else's.
+
+**If you don't, it still works.** Safari refuses a WebSocket to an
+untrusted certificate even after you accept the warning for the page, so
+a certificate you skipped would otherwise leave you with an app that
+loads and then moves nothing. The server therefore also listens on plain
+HTTP one port up; when the encrypted socket will not open, the web app
+says why and offers that address with the PIN already in it. Encryption
+is the default and the way around it is one tap.
+
+`--no-tls` serves plain HTTP only. `--no-http-fallback` closes the
+unencrypted port.
 
 ## Quick start
+
+```bash
+pip install git+https://github.com/nkVas1/AirBridge
+airbridge
+```
+
+Or from a checkout — `start.bat` on Windows, `start.sh` elsewhere, both
+of which create a virtual environment first:
 
 ```bash
 git clone https://github.com/nkVas1/AirBridge
@@ -98,21 +133,18 @@ pip install -r requirements.txt
 python -m airbridge
 ```
 
-On Windows, `start.bat` does the same and creates a virtual environment
-first. On macOS and Linux, `start.sh`.
-
 The terminal prints the address, the PIN, and a QR code:
 
 ```
-============================================================
+================================================================
   AirBridge - Wireless File Transfer
-============================================================
+================================================================
 
-  Server running at:  https://192.168.1.59:8090
+  Open on the phone:  https://192.168.1.59:8090
   Connection PIN:     482901
   Downloads folder:   C:\Users\you\Downloads\AirBridge_Downloads
 
-  Point your phone camera at this code:
+  Point the phone camera at this code:
 
         █████████████████████████████████████
         ████ ▄▄▄▄▄ █▀  ▄▄▄▀▀  █▀██ ▄▄▄▄▄ ████
@@ -122,17 +154,22 @@ The terminal prints the address, the PIN, and a QR code:
                         ( ... )
         █████████████████████████████████████
 
-  Or open the address by hand and enter the PIN.
+  First time on this phone, to avoid warnings and make sure
+  transfers can be encrypted, install the AirBridge
+  certificate from  https://192.168.1.59:8090/ca.crt
+    iOS: Settings > Profile Downloaded > Install, then
+         Settings > General > About > Certificate Trust Settings
+  Authority SHA-256: 21:25:9A:87:E0:F3:B3:47:...
 
-  The certificate is self-signed, so the phone warns once:
-    tap "Show Details" -> "visit this website" to continue.
-  Certificate SHA-256: 21:25:9A:87:E0:F3:B3:47:...
-============================================================
+  If the phone will not connect over HTTPS, this address
+  always works, without encryption:
+    http://192.168.1.59:8091
+================================================================
 ```
 
-Point the iPhone camera at the code and tap the notification. The PIN
-travels inside the link, so the app connects on its own and then strips
-the PIN back out of the address bar.
+Point the camera at the code and tap the notification. The PIN travels
+inside the link, so the app connects on its own and then strips the PIN
+back out of the address bar.
 
 ### Without any internet
 
@@ -145,20 +182,22 @@ Both devices are then on a network with no route out, which is the point.
 ### Options
 
 ```bash
-python -m airbridge --port 9000               # different port
-python -m airbridge --downloads-dir D:/Inbox  # where received files land
-python -m airbridge --no-tls                  # plain HTTP, no encryption
-python -m airbridge --log-level DEBUG         # verbose
+airbridge --port 9000               # different port (fallback takes 9001)
+airbridge --downloads-dir D:/Inbox  # where received files land
+airbridge --no-tls                  # plain HTTP only, no encryption
+airbridge --no-http-fallback        # encrypted port only
+airbridge --log-level DEBUG         # verbose
 ```
 
 The same settings exist as `AIRBRIDGE_PORT`, `AIRBRIDGE_DOWNLOADS`,
-`AIRBRIDGE_TLS`, `AIRBRIDGE_CERT_DIR` and `AIRBRIDGE_LOG_LEVEL`.
+`AIRBRIDGE_TLS`, `AIRBRIDGE_HTTP_FALLBACK`, `AIRBRIDGE_CERT_DIR` and
+`AIRBRIDGE_LOG_LEVEL`.
 
 ## Requirements
 
 - **PC** — Python 3.10+. Built and used on Windows 11; the code is plain
-  cross-platform Python and runs on macOS and Linux, but those get far
-  less exercise.
+  cross-platform Python and CI runs it on Linux too, but macOS gets no
+  real-world testing.
 - **Phone** — Safari on iOS 15+, or any current mobile browser.
 - **Network** — both devices on the same Wi-Fi, or the PC on the phone's
   hotspot. No internet needed either way.
@@ -167,27 +206,20 @@ The same settings exist as `AIRBRIDGE_PORT`, `AIRBRIDGE_DOWNLOADS`,
 
 Named here rather than discovered later:
 
-- **A dropped transfer does not resume.** The connection is allowed to
-  close mid-file and the partial file stays on disk; there is no code to
-  pick it back up.
-- **The client does not verify the checksum.** The server hashes every
-  transfer with SHA-256 and reports the digest, but the browser side
-  ignores it, so corruption would go unnoticed.
-- **The PIN is six digits and is not rate-limited.** It is a barrier
-  against the wrong person on the same network tapping *Connect*, not
-  against a determined attacker. It changes on every restart.
-- **The certificate is self-signed**, so each new certificate costs one
-  browser warning.
-- **mDNS is best-effort.** `airbridge.local` fails to register on some
-  Windows setups; the server logs a warning and carries on, and the
-  numeric address in the banner always works.
-- **Run it from the checkout, not from `pip install`.** `webapp/` sits
-  outside the Python package, so an installed wheel has the server but
-  none of the web interface, and the `airbridge` console script it puts
-  on PATH answers with a plain-text placeholder. Packaging the assets
-  properly means moving them into the package.
-- `crypto.py` still carries AES-GCM helpers that nothing calls. Transport
-  security is TLS; those functions are vestigial.
+- **Downloads do not resume.** Uploads do; a file pulled from the PC to
+  the phone starts over if the connection drops.
+- **One PIN, one person.** There is no notion of separate users, and
+  anyone with the PIN sees everything in the downloads folder.
+- **The PIN rides in the pairing link.** That is what makes the QR code
+  work in the stock camera app. The app strips it from the address bar
+  after connecting, but it is a query string, and query strings leak.
+- **The certificate needs installing for a warning-free encrypted
+  connection.** One tap, once per phone, and it is a private authority
+  living on your machine — remove it in *Certificate Trust Settings* when
+  you no longer want it.
+- **mDNS is best-effort.** `airbridge.local` does not resolve on every
+  network; the numeric address in the banner always works.
+- **10 GB per file**, and no directory upload — files only.
 - **None of this has been security-audited.** It is one person's tool,
   published as-is.
 
@@ -196,12 +228,18 @@ Named here rather than discovered later:
 ```bash
 pip install -r requirements-dev.txt
 
-pytest tests/ -q                  # 73 tests
+pytest tests/ -q                  # 84 tests
 ruff check airbridge/ tests/
 mypy airbridge/
 ```
 
 CI runs all three on Windows and Linux across Python 3.10, 3.11 and 3.12.
+
+The tests worth knowing about: `test_tls.py` asserts each of Apple's
+certificate requirements individually, because breaking one of them
+breaks the product completely rather than degrading it, and
+`test_websocket.py` drives a real socket through an interrupted transfer
+to prove it resumes and that the digest still covers the whole file.
 
 ### Layout
 
@@ -209,14 +247,13 @@ CI runs all three on Windows and Linux across Python 3.10, 3.11 and 3.12.
 airbridge/
   __main__.py     CLI entry point
   server.py       HTTP + WebSocket routes, startup banner
-  transfer.py     chunked transfer engine, progress, SHA-256
-  auth.py         PIN, pairing URL, QR rendering
-  tls.py          self-signed certificate lifecycle
+  transfer.py     chunked transfer engine, resume, SHA-256
+  auth.py         PIN, throttling, pairing URL, QR rendering
+  tls.py          local certificate authority and server certificates
   discovery.py    mDNS/Bonjour announce
   config.py       settings from environment and CLI
-  crypto.py       checksums and AES-GCM helpers
-webapp/           the PWA the phone loads - no build step
-  index.html, css/, js/app.js, sw.js, manifest.json
+  webapp/         the page the phone loads - no build step
+    index.html, css/, js/app.js, js/sha256.js, sw.js, manifest.json
 tests/            pytest, async
 docs/screenshots/
 ```
@@ -233,9 +270,9 @@ the bytes.
 | to server | `upload_chunk` | `transfer_id` — binary frame follows |
 | to server | `upload_cancel` | `transfer_id` |
 | to server | `download_request` | `filename` |
-| to client | `auth_result` | `authenticated`, `session_id` |
-| to client | `upload_ready` | `transfer_id`, `total_chunks`, `chunk_size` |
-| to client | `chunk_ack` | `progress`, `speed_bps`, `eta_seconds` |
+| to client | `auth_result` | `authenticated`, `session_id`, `locked_for` |
+| to client | `upload_ready` | `transfer_id`, `total_chunks`, `chunk_size`, `resume_from` |
+| to client | `chunk_ack` | `progress`, `bytes_received`, `speed_bps`, `eta_seconds` |
 | to client | `upload_complete` | `transfer_id`, `checksum` |
 | to client | `download_start` | `transfer_id`, `filename`, `file_size` |
 | to client | `download_chunk` | `transfer_id`, `chunk_index` — binary follows |
