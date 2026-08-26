@@ -65,6 +65,15 @@ project exists for.
   transport security is TLS — and a module of unused cryptography reads
   like a promise the product does not keep.
 
+### Documentation
+
+- The README said iPhone throughout, which undersold what the code does.
+  The phone's side is an ordinary web page: an iPad, an Android phone or
+  tablet, and a second desktop browser were each put through a real
+  transfer and each pairs, transfers and verifies. The new Devices table
+  records that, and the iPhone keeps its place as the case the project
+  was built for and the strictest one to satisfy.
+
 ## [1.1.0] — 2026-08-26
 
 The 1.0.0 README promised encryption, a pairing QR code and an offline

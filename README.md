@@ -2,12 +2,12 @@
 
 # AirBridge
 
-**Wireless file transfer between a Windows PC and an iPhone, over your own network.**
-*The phone installs nothing. The network needs no internet. Nothing is uploaded anywhere.*
+**Wireless file transfer between your computer and any phone or tablet, over your own network.**
+*The device installs nothing. The network needs no internet. Nothing is uploaded anywhere.*
 
 [![Download](https://img.shields.io/github/v/release/nkVas1/AirBridge?label=download&color=00b140)](https://github.com/nkVas1/AirBridge/releases/latest)
 [![CI](https://github.com/nkVas1/AirBridge/actions/workflows/ci.yml/badge.svg)](https://github.com/nkVas1/AirBridge/actions/workflows/ci.yml)
-[![Platform](https://img.shields.io/badge/platform-Windows_·_iOS_Safari-0078D6?logo=windows)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-Windows_·_iOS_·_Android-0078D6?logo=windows)](#devices)
 [![Stack](https://img.shields.io/badge/stack-Python_·_aiohttp_·_PWA-3776AB?logo=python&logoColor=white)](#how-it-works)
 [![License](https://img.shields.io/badge/license-source--available_NC-lightgrey)](LICENSE)
 
@@ -25,6 +25,12 @@ the Apple ecosystem. A cable needs software on the PC and still argues
 about file types. Everything else routes a private file through somebody
 else's server to travel three metres.
 
+That pairing is what AirBridge was built for, and it is the hardest case
+— Safari is the strictest browser about certificates on a local network.
+Nothing in the design is specific to it, though: the phone's side is an
+ordinary web page, so **an iPad, an Android phone or tablet, or a second
+computer all work the same way**. See [Devices](#devices).
+
 The tools that do solve it each ask for something:
 
 | | on the phone | needs internet | notes |
@@ -35,17 +41,18 @@ The tools that do solve it each ask for something:
 | **[qrcp](https://github.com/claudiodangelis/qrcp)** | browser only | no | one-shot terminal transfer; no session, no progress, bring your own certificate |
 | **Windows Phone Link** | built in | yes | iPhone → PC only, and file types depend on the sending app |
 | **Cloud drives** | install an app | **yes** | the file leaves your network |
-| **AirBridge** | **browser only** | **no** | a session that stays open, with previews, progress and resume |
+| **AirBridge** | **browser only** | **no** | any browser device; a session that stays open, with previews, progress and resume |
 
 ¹ *PairDrop can be self-hosted for offline use, which means running Node and
 a STUN/TURN setup of your own.*
 
 The gap AirBridge fills is narrow and real: nothing to install on the
-phone, nothing outside the room, **and** a session that behaves like an
-app rather than a single shot. You run a small server on the PC; the
-phone opens it in Safari and stays connected — sending, browsing what has
-arrived, previewing it, pulling files back. It works on a hotel network,
-and on an iPhone Personal Hotspot with cellular data switched off.
+other device, nothing outside the room, **and** a session that behaves
+like an app rather than a single shot. You run a small server on the
+computer; the phone or tablet opens it in a browser and stays connected —
+sending, browsing what has arrived, previewing it, pulling files back. It
+works on a hotel network, and on a phone's own hotspot with cellular data
+switched off.
 
 **It is a personal tool, not a product.** No account, no telemetry, no
 update channel, no support commitment. If installing an app on the phone
@@ -55,16 +62,16 @@ README would rather say so than pretend otherwise.
 ## How it works
 
 ```
-   Windows PC                                        iPhone
+   Your computer                                Phone or tablet
 ┌────────────────────┐                        ┌────────────────────┐
 │  python -m         │                        │                    │
 │    airbridge       │   1. scan the QR code  │  Camera app        │
 │                    │ ─────────────────────► │       │            │
 │  ┌──────────────┐  │                        │       ▼            │
 │  │ aiohttp      │  │   2. TLS 1.3 handshake │  ┌──────────────┐  │
-│  │  HTTPS + WSS │◄─┼────────────────────────┼─►│ Safari       │  │
-│  │              │  │      AES-256-GCM       │  │  PWA, no     │  │
-│  │  PIN auth    │  │                        │  │  install     │  │
+│  │  HTTPS + WSS │◄─┼────────────────────────┼─►│ Any modern   │  │
+│  │              │  │      AES-256-GCM       │  │  browser -   │  │
+│  │  PIN auth    │  │                        │  │  no install  │  │
 │  │  SHA-256     │  │   3. 64 KB chunks,     │  └──────────────┘  │
 │  └──────┬───────┘  │      either direction, │                    │
 │         │          │      resumable         │                    │
@@ -173,8 +180,9 @@ back out of the address bar.
 
 ### Without any internet
 
-1. Turn on **Personal Hotspot** on the iPhone. Cellular data can stay off.
-2. Connect the PC to that hotspot.
+1. Turn on the phone's **hotspot** — Personal Hotspot on iOS. Cellular
+   data can stay off.
+2. Connect the computer to that hotspot.
 3. Run AirBridge and scan the code.
 
 Both devices are then on a network with no route out, which is the point.
@@ -193,14 +201,32 @@ The same settings exist as `AIRBRIDGE_PORT`, `AIRBRIDGE_DOWNLOADS`,
 `AIRBRIDGE_TLS`, `AIRBRIDGE_HTTP_FALLBACK`, `AIRBRIDGE_CERT_DIR` and
 `AIRBRIDGE_LOG_LEVEL`.
 
-## Requirements
+## Devices
 
-- **PC** — Python 3.10+. Built and used on Windows 11; the code is plain
-  cross-platform Python and CI runs it on Linux too, but macOS gets no
-  real-world testing.
-- **Phone** — Safari on iOS 15+, or any current mobile browser.
-- **Network** — both devices on the same Wi-Fi, or the PC on the phone's
-  hotspot. No internet needed either way.
+**The computer** runs the server and needs Python 3.10+. Built and used
+on Windows 11; the code is plain cross-platform Python and CI runs the
+suite on Linux as well, but macOS gets no real-world testing.
+
+**The other device** needs a browser and nothing else. Each of these was
+checked by running a real transfer through it, not by reading the code:
+
+| | pairs | transfers | verifies checksum | offline cache |
+|---|:---:|:---:|:---:|:---:|
+| iPhone (Safari, iOS 15+) | ✓ | ✓ | ✓ | ✓¹ |
+| iPad | ✓ | ✓ | ✓ | ✓¹ |
+| Android phone (Chrome) | ✓ | ✓ | ✓ | ✓ |
+| Android tablet | ✓ | ✓ | ✓ | ✓ |
+| Another desktop browser | ✓ | ✓ | ✓ | ✓ |
+
+¹ *After the certificate is installed. Without it Safari falls back to
+the unencrypted port, where browsers disable offline caching.*
+
+The layout is built for a phone and centres itself on anything wider, so
+a tablet or a desktop window gets the same interface rather than a
+stretched one.
+
+**The network** just has to carry both devices: the same Wi-Fi, or the
+computer joined to the phone's hotspot. No internet either way.
 
 ## Known limitations
 
