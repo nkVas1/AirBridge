@@ -5,6 +5,8 @@
 **Wireless file transfer between your computer and any phone or tablet, over your own network.**
 *The device installs nothing. The network needs no internet. Nothing is uploaded anywhere.*
 
+### [→ airbridge on the web](https://nkvas1.github.io/AirBridge/)
+
 [![Download](https://img.shields.io/github/v/release/nkVas1/AirBridge?label=download&color=00b140)](https://github.com/nkVas1/AirBridge/releases/latest)
 [![CI](https://github.com/nkVas1/AirBridge/actions/workflows/ci.yml/badge.svg)](https://github.com/nkVas1/AirBridge/actions/workflows/ci.yml)
 [![Platform](https://img.shields.io/badge/platform-Windows_·_iOS_·_Android-0078D6?logo=windows)](#devices)
